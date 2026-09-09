@@ -144,7 +144,7 @@ function renderPassage() {
   screenEl.innerHTML = `
     <div class="card">
       <div class="passage-title">${escapeHtml(s.title)}</div>
-      <div class="passage-hint">Stuck on a word? Tap it to hear it read aloud.</div>
+      <div class="passage-hint">Stuck on a word? Tap it to hear it read aloud — or drag across a few words to hear the whole phrase.</div>
       <div class="passage-text" id="passage-text">${renderClickableWords(s.passage)}</div>
     </div>
     <div class="card record-wrap">
@@ -161,10 +161,7 @@ function renderPassage() {
     </div>
   `;
 
-  document.getElementById('passage-text').addEventListener('click', (e) => {
-    const wordEl = e.target.closest('.word');
-    if (wordEl) playWord(wordEl.dataset.word, wordEl);
-  });
+  initPassageDragSelect(document.getElementById('passage-text'));
 
   if (state.recording) {
     document.getElementById('stop-btn').addEventListener('click', stopRecording);
@@ -177,8 +174,12 @@ function renderPassage() {
 // Splits passage text into whitespace tokens (kept as-is, preserving
 // paragraph breaks) and word tokens (wrapped in a clickable span). Each
 // span's data-word is the punctuation-stripped word actually sent for
-// speech synthesis; the displayed text keeps its original punctuation.
+// single-word speech synthesis (and used as the audio cache key); the
+// displayed text keeps its original punctuation. data-index numbers word
+// spans sequentially so a drag gesture can find the range between two of
+// them regardless of direction.
 function renderClickableWords(text) {
+  let index = 0;
   return text
     .split(/(\s+)/)
     .map((tok) => {
@@ -186,7 +187,9 @@ function renderClickableWords(text) {
       if (/^\s+$/.test(tok)) return escapeHtml(tok);
       const clean = tok.replace(/^[^a-zA-Z0-9']+|[^a-zA-Z0-9']+$/g, '');
       if (!clean) return escapeHtml(tok);
-      return `<span class="word" data-word="${escapeHtml(clean)}">${escapeHtml(tok)}</span>`;
+      const span = `<span class="word" data-word="${escapeHtml(clean)}" data-index="${index}">${escapeHtml(tok)}</span>`;
+      index++;
+      return span;
     })
     .join('');
 }
@@ -194,28 +197,99 @@ function renderClickableWords(text) {
 const wordAudioCache = new Map();
 let currentWordAudio = null;
 
-async function playWord(word, el) {
+// Tap a single word → play it (cached per word). Drag across several →
+// play the whole phrase in one go, using Pointer Events so mouse, touch,
+// and pen all work the same way. document.elementFromPoint (rather than
+// pointer capture on the start element) is what lets the drag continue
+// tracking correctly as the pointer moves over sibling word spans.
+let dragState = null;
+
+function initPassageDragSelect(containerEl) {
+  containerEl.addEventListener('pointerdown', (e) => {
+    const wordEl = e.target.closest('.word');
+    if (!wordEl) return;
+    e.preventDefault();
+    // Capture so pointermove/pointerup keep reaching this element even if
+    // the drag leaves the passage box (or a finger drags past its edge).
+    containerEl.setPointerCapture(e.pointerId);
+    dragState = { startIndex: Number(wordEl.dataset.index), currentIndex: Number(wordEl.dataset.index) };
+    updateSelectionHighlight(containerEl, dragState.startIndex, dragState.currentIndex);
+  });
+
+  containerEl.addEventListener('pointermove', (e) => {
+    if (!dragState) return;
+    const target = document.elementFromPoint(e.clientX, e.clientY);
+    const wordEl = target && target.closest && target.closest('.word');
+    if (!wordEl || !containerEl.contains(wordEl)) return;
+    dragState.currentIndex = Number(wordEl.dataset.index);
+    updateSelectionHighlight(containerEl, dragState.startIndex, dragState.currentIndex);
+  });
+
+  containerEl.addEventListener('pointerup', () => finishDragSelect(containerEl));
+  containerEl.addEventListener('pointercancel', () => {
+    dragState = null;
+    clearSelectionHighlight(containerEl);
+  });
+}
+
+function finishDragSelect(containerEl) {
+  if (!dragState) return;
+  const lo = Math.min(dragState.startIndex, dragState.currentIndex);
+  const hi = Math.max(dragState.startIndex, dragState.currentIndex);
+  dragState = null;
+  clearSelectionHighlight(containerEl);
+
+  const spans = Array.from(containerEl.querySelectorAll('.word')).filter((el) => {
+    const idx = Number(el.dataset.index);
+    return idx >= lo && idx <= hi;
+  });
+  if (spans.length === 1) {
+    playWord(spans[0].dataset.word, spans);
+  } else if (spans.length > 1) {
+    playWord(spans.map((el) => el.textContent).join(' '), spans);
+  }
+}
+
+function updateSelectionHighlight(containerEl, a, b) {
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  containerEl.querySelectorAll('.word').forEach((el) => {
+    const idx = Number(el.dataset.index);
+    el.classList.toggle('selecting', idx >= lo && idx <= hi);
+  });
+}
+
+function clearSelectionHighlight(containerEl) {
+  containerEl.querySelectorAll('.word.selecting').forEach((el) => el.classList.remove('selecting'));
+}
+
+// text: the word (single tap, punctuation-stripped) or phrase (drag,
+// original punctuation kept for natural intonation) to speak. els: the
+// span(s) to highlight while it plays. Only single words are cached —
+// dragged phrases are unlikely to repeat exactly.
+async function playWord(text, els) {
   if (currentWordAudio) {
     currentWordAudio.pause();
   }
   document.querySelectorAll('.word.playing').forEach((w) => w.classList.remove('playing'));
-  el.classList.add('playing');
+  els.forEach((el) => el.classList.add('playing'));
 
+  const cacheable = els.length === 1;
   try {
-    let url = wordAudioCache.get(word);
+    let url = cacheable ? wordAudioCache.get(text) : null;
     if (!url) {
       const blob = await authedFetchBlob('/.netlify/functions/speak-word', {
         method: 'POST',
-        body: JSON.stringify({ word }),
+        body: JSON.stringify({ text }),
       });
       url = URL.createObjectURL(blob);
-      wordAudioCache.set(word, url);
+      if (cacheable) wordAudioCache.set(text, url);
     }
     currentWordAudio = new Audio(url);
-    currentWordAudio.addEventListener('ended', () => el.classList.remove('playing'));
+    currentWordAudio.addEventListener('ended', () => els.forEach((el) => el.classList.remove('playing')));
     await currentWordAudio.play();
   } catch (e) {
-    el.classList.remove('playing');
+    els.forEach((el) => el.classList.remove('playing'));
   }
 }
 
