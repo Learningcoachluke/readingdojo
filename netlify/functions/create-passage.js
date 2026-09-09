@@ -56,18 +56,20 @@ exports.handler = async function (event) {
     const { shortAnswerCount, multipleChoiceCount } = questionMixForYear(yearLevel);
     const wordTarget = wordTargetForYear(yearLevel);
 
-    let generated = await generatePassage({ apiKey, topic, yearLevel, wordTarget, multipleChoiceCount, shortAnswerCount });
+    const generated = await generatePassage({ apiKey, topic, yearLevel, wordTarget, multipleChoiceCount, shortAnswerCount });
 
-    let passageCheck = await hardBlockCheck(generated.passage);
+    // Single check, no retry: Netlify's ~10s synchronous function timeout
+    // doesn't leave room for a second sequential Claude call. The topic was
+    // already hard-blocked above and the system prompt itself instructs
+    // Claude to redirect unsafe topics, so this is a backstop, not the
+    // primary defense — if it trips, the boy just submits again (a fresh
+    // generation), rather than this function retrying internally.
+    const passageCheck = await hardBlockCheck(generated.passage);
     if (passageCheck.blocked) {
-      generated = await generatePassage({ apiKey, topic, yearLevel, wordTarget, multipleChoiceCount, shortAnswerCount, strict: true });
-      passageCheck = await hardBlockCheck(generated.passage);
-      if (passageCheck.blocked) {
-        return {
-          statusCode: 422,
-          body: JSON.stringify({ blocked: true, message: "Couldn't build a passage for that topic — try a different one." }),
-        };
-      }
+      return {
+        statusCode: 422,
+        body: JSON.stringify({ blocked: true, message: "Couldn't build a passage for that topic — try again." }),
+      };
     }
 
     const wordCount = generated.passage.trim().split(/\s+/).filter(Boolean).length;
@@ -92,9 +94,8 @@ exports.handler = async function (event) {
       model_answer: q.type === "short_answer" ? q.modelAnswer : null,
       explanation: q.explanation || null,
     }));
-    const insertedQuestions = await insertMany("comprehension_questions", questionRows);
-
-    await logUsage();
+    // Run independently of each other to trim one round trip off the total.
+    const [insertedQuestions] = await Promise.all([insertMany("comprehension_questions", questionRows), logUsage()]);
 
     return {
       statusCode: 200,
