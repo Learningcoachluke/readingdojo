@@ -84,4 +84,11 @@ async function softFlagCheck(text) {
   return { flagged: tripped.length > 0, categories: tripped };
 }
 
-module.exports = { hardBlockCheck, softFlagCheck };
+// Cheap, local, no-API-call check for single-word contexts (e.g. word-tap
+// audio) where a full Moderation API round trip per click isn't worth the
+// latency/cost — the wordlist alone is the realistic risk for one word.
+function containsProfanity(text) {
+  return PROFANITY_RE.test(text);
+}
+
+module.exports = { hardBlockCheck, softFlagCheck, containsProfanity };

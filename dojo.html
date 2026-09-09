@@ -144,7 +144,8 @@ function renderPassage() {
   screenEl.innerHTML = `
     <div class="card">
       <div class="passage-title">${escapeHtml(s.title)}</div>
-      <div class="passage-text">${escapeHtml(s.passage)}</div>
+      <div class="passage-hint">Stuck on a word? Tap it to hear it read aloud.</div>
+      <div class="passage-text" id="passage-text">${renderClickableWords(s.passage)}</div>
     </div>
     <div class="card record-wrap">
       ${state.recording ? `
@@ -160,11 +161,61 @@ function renderPassage() {
     </div>
   `;
 
+  document.getElementById('passage-text').addEventListener('click', (e) => {
+    const wordEl = e.target.closest('.word');
+    if (wordEl) playWord(wordEl.dataset.word, wordEl);
+  });
+
   if (state.recording) {
     document.getElementById('stop-btn').addEventListener('click', stopRecording);
     document.getElementById('stop-btn-2').addEventListener('click', stopRecording);
   } else {
     document.getElementById('start-record-btn').addEventListener('click', startRecording);
+  }
+}
+
+// Splits passage text into whitespace tokens (kept as-is, preserving
+// paragraph breaks) and word tokens (wrapped in a clickable span). Each
+// span's data-word is the punctuation-stripped word actually sent for
+// speech synthesis; the displayed text keeps its original punctuation.
+function renderClickableWords(text) {
+  return text
+    .split(/(\s+)/)
+    .map((tok) => {
+      if (!tok) return '';
+      if (/^\s+$/.test(tok)) return escapeHtml(tok);
+      const clean = tok.replace(/^[^a-zA-Z0-9']+|[^a-zA-Z0-9']+$/g, '');
+      if (!clean) return escapeHtml(tok);
+      return `<span class="word" data-word="${escapeHtml(clean)}">${escapeHtml(tok)}</span>`;
+    })
+    .join('');
+}
+
+const wordAudioCache = new Map();
+let currentWordAudio = null;
+
+async function playWord(word, el) {
+  if (currentWordAudio) {
+    currentWordAudio.pause();
+  }
+  document.querySelectorAll('.word.playing').forEach((w) => w.classList.remove('playing'));
+  el.classList.add('playing');
+
+  try {
+    let url = wordAudioCache.get(word);
+    if (!url) {
+      const blob = await authedFetchBlob('/.netlify/functions/speak-word', {
+        method: 'POST',
+        body: JSON.stringify({ word }),
+      });
+      url = URL.createObjectURL(blob);
+      wordAudioCache.set(word, url);
+    }
+    currentWordAudio = new Audio(url);
+    currentWordAudio.addEventListener('ended', () => el.classList.remove('playing'));
+    await currentWordAudio.play();
+  } catch (e) {
+    el.classList.remove('playing');
   }
 }
 

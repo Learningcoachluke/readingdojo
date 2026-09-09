@@ -238,7 +238,17 @@ button:disabled{ opacity:0.45; cursor:not-allowed; }
 
 /* ---------- Passage ---------- */
 .passage-title{ font-family:var(--display); font-size:24px; margin-bottom:14px; }
-.passage-text{ font-size:17px; line-height:1.7; white-space:pre-wrap; color:#f0f0f0; }
+.passage-text{ font-size:17px; line-height:1.9; white-space:pre-wrap; color:#f0f0f0; }
+.word{
+  cursor:pointer;
+  border-radius:4px;
+  padding:1px 2px;
+  margin:0 -2px;
+  transition:background 0.12s ease, color 0.12s ease;
+}
+.word:hover{ background:rgba(158,232,168,0.18); }
+.word.playing{ background:var(--mint); color:#0a0a0a; }
+.passage-hint{ font-size:13px; color:var(--grey); margin-bottom:14px; }
 
 /* ---------- Nav / header ---------- */
 .top-nav{ display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; }

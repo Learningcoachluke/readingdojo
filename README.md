@@ -6,7 +6,7 @@ Boys log in to their own account, get an AI-generated reading passage on a topic
 - **Frontend:** plain HTML/CSS/JS, no build step. `supabase-js` loads from a pinned CDN build.
 - **Backend:** Netlify Functions (Node, no npm dependencies — plain `fetch`).
 - **Database/Auth:** Supabase (Postgres + Row Level Security). Project: `reading-dojo` (`cyswopxbjflcdwfzegjr`, region `ap-southeast-2`).
-- **AI:** Anthropic Claude (passage generation, comprehension grading), OpenAI (`gpt-4o-transcribe` for read-aloud transcription, Moderation API for safety checks).
+- **AI:** Anthropic Claude (passage generation, comprehension grading), OpenAI (`gpt-4o-transcribe` for read-aloud transcription, Moderation API for safety checks), ElevenLabs (tap-a-word-to-hear-it audio in the passage).
 
 ## One-time Supabase dashboard setup
 Do this once in the [Supabase dashboard](https://supabase.com/dashboard/project/cyswopxbjflcdwfzegjr) — not exposed via the MCP tools used to build this:
@@ -21,6 +21,9 @@ Do this once in the [Supabase dashboard](https://supabase.com/dashboard/project/
 | `SUPABASE_URL` | all functions | `https://cyswopxbjflcdwfzegjr.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | all functions | From Supabase dashboard → Project Settings → API → service_role/secret key. **Never commit this.** |
 | `DAILY_AI_CALL_LIMIT` | rate limiting | Optional, defaults to 15/boy/day/endpoint |
+| `ELEVENLABS_API_KEY` | speak-word | Tap-a-word audio |
+| `ELEVENLABS_VOICE_ID` | speak-word | Optional, defaults to the premade "Adam" voice — change to any ElevenLabs voice ID to use a different voice |
+| `DAILY_WORD_AUDIO_LIMIT` | speak-word rate limiting | Optional, defaults to 300/boy/day (word clicks are naturally far more frequent than passage/quiz generation) |
 
 The frontend's Supabase URL/anon key are hardcoded in `shared/supabase-client.js` — safe to be public, since access is controlled by Row Level Security, not secrecy.
 

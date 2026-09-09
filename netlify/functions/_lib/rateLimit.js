@@ -6,8 +6,8 @@ const { select, insertOne } = require("./supabaseRest");
 
 const DEFAULT_DAILY_LIMIT = 15;
 
-async function checkAndLog(boyId, endpoint) {
-  const limit = Number(process.env.DAILY_AI_CALL_LIMIT) || DEFAULT_DAILY_LIMIT;
+async function checkAndLog(boyId, endpoint, limit) {
+  const effectiveLimit = limit || Number(process.env.DAILY_AI_CALL_LIMIT) || DEFAULT_DAILY_LIMIT;
   const startOfDayUtc = new Date();
   startOfDayUtc.setUTCHours(0, 0, 0, 0);
 
@@ -16,7 +16,7 @@ async function checkAndLog(boyId, endpoint) {
     `boy_id=eq.${boyId}&endpoint=eq.${endpoint}&created_at=gte.${startOfDayUtc.toISOString()}&select=id`
   );
 
-  if (rows.length >= limit) {
+  if (rows.length >= effectiveLimit) {
     const err = new Error("Daily practice limit reached for today — come back tomorrow!");
     err.statusCode = 429;
     throw err;

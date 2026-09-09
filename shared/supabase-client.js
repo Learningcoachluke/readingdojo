@@ -57,6 +57,35 @@ async function authedFetch(path, options = {}) {
   return data;
 }
 
+// Same as authedFetch, but for endpoints that return binary audio instead
+// of JSON (e.g. speak-word) — resolves to a Blob on success.
+async function authedFetchBlob(path, options = {}) {
+  const {
+    data: { session },
+  } = await sb.auth.getSession();
+  if (!session) {
+    window.location.href = "/index.html";
+    throw new Error("Not logged in");
+  }
+  const headers = Object.assign({}, options.headers, {
+    "Content-Type": "application/json",
+    Authorization: "Bearer " + session.access_token,
+  });
+  const res = await fetch(path, Object.assign({}, options, { headers }));
+  if (!res.ok) {
+    let data = null;
+    try {
+      data = await res.json();
+    } catch (e) {
+      /* no JSON body */
+    }
+    const err = new Error((data && (data.message || data.error)) || `Request failed (${res.status})`);
+    err.statusCode = res.status;
+    throw err;
+  }
+  return res.blob();
+}
+
 function escapeHtml(str) {
   return String(str == null ? "" : str)
     .replace(/&/g, "&amp;")
