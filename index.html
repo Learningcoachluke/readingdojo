@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reading Dojo — Log In</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Permanent+Marker&family=Nunito:ital,wght@0,400;0,600;0,700;0,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared/theme.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">🥋 Reading Dojo</div>
+  <div class="card">
+    <label class="field-label" for="username">Enter your Dojo login</label>
+    <input type="text" id="username" placeholder="Username" autocomplete="username" />
+    <input type="password" id="pin" placeholder="PIN" autocomplete="current-password" inputmode="numeric" style="margin-top:10px;" />
+    <div class="error" id="error"></div>
+    <button class="btn-primary" id="login-btn">Enter the Dojo</button>
+  </div>
+</div>
+<script src="shared/supabase-client.js"></script>
+<script>
+  (async function init() {
+    const { data: { session } } = await sb.auth.getSession();
+    if (session) window.location.href = "/dojo.html";
+  })();
+
+  document.getElementById('login-btn').addEventListener('click', login);
+  document.getElementById('pin').addEventListener('keydown', function (e) { if (e.key === 'Enter') login(); });
+  document.getElementById('username').addEventListener('keydown', function (e) { if (e.key === 'Enter') document.getElementById('pin').focus(); });
+
+  async function login() {
+    const errEl = document.getElementById('error');
+    errEl.textContent = '';
+    const username = document.getElementById('username').value.trim().toLowerCase();
+    const pin = document.getElementById('pin').value.trim();
+    if (!username || !pin) { errEl.textContent = 'Enter your username and PIN.'; return; }
+
+    const btn = document.getElementById('login-btn');
+    btn.disabled = true;
+    btn.textContent = 'Checking...';
+
+    const email = username + '@reading.blackbelt';
+    const { error } = await sb.auth.signInWithPassword({ email: email, password: pin });
+
+    btn.disabled = false;
+    btn.textContent = 'Enter the Dojo';
+
+    if (error) {
+      errEl.textContent = "That username or PIN isn't right — check with your coach.";
+      return;
+    }
+    window.location.href = "/dojo.html";
+  }
+</script>
+</body>
+</html>

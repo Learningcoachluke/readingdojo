@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reading Dojo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Permanent+Marker&family=Nunito:ital,wght@0,400;0,600;0,700;0,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared/theme.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="top-nav">
+    <span class="welcome" id="welcome-name">&nbsp;</span>
+    <div style="display:flex; gap:8px;">
+      <a href="stats.html" class="btn-secondary" style="text-decoration:none; display:inline-block;">My Stats</a>
+      <button class="btn-secondary" id="logout-btn">Log out</button>
+    </div>
+  </div>
+  <div class="brand">🥋 Reading Dojo</div>
+  <div id="screen"></div>
+</div>
+
+<script src="shared/supabase-client.js"></script>
+<script>
+const YEAR_LEVELS = [
+  { year: 2, age: 'Ages 6-7' }, { year: 3, age: 'Ages 7-8' }, { year: 4, age: 'Ages 8-9' },
+  { year: 5, age: 'Ages 9-10' }, { year: 6, age: 'Ages 10-11' }, { year: 7, age: 'Ages 11-12' },
+  { year: 8, age: 'Ages 12-13' }, { year: 9, age: 'Ages 13-14' }, { year: 10, age: 'Ages 14-15' },
+];
+
+const LOADING_MESSAGES = {
+  passage: 'Writing your reading challenge...',
+  scoring: 'Listening back to your reading...',
+  grading: 'Marking your answers...',
+};
+
+const state = {
+  screen: 'setup',
+  topic: '',
+  year: null,
+  session: null,     // { sessionId, title, passage, questions }
+  recording: false,
+  mediaRecorder: null,
+  audioChunks: [],
+  recordStart: null,
+  recordTimer: null,
+  elapsedSeconds: 0,
+  readingStats: null, // { accuracyPct, wpm, durationSeconds, transcript }
+  qIndex: 0,
+  answers: [],         // { questionId, answer }
+  quizResults: null,   // { results, correctCount, total }
+  errorMsg: '',
+};
+
+const screenEl = document.getElementById('screen');
+
+function setState(patch) {
+  Object.assign(state, patch);
+  render();
+}
+
+function render() {
+  if (state.screen === 'setup') return renderSetup();
+  if (state.screen === 'loading-passage') return renderLoading('passage');
+  if (state.screen === 'passage') return renderPassage();
+  if (state.screen === 'scoring') return renderLoading('scoring');
+  if (state.screen === 'reading-results') return renderReadingResults();
+  if (state.screen === 'quiz') return renderQuiz();
+  if (state.screen === 'grading') return renderLoading('grading');
+  if (state.screen === 'results') return renderResults();
+}
+
+// ---------------- Setup ----------------
+function renderSetup() {
+  screenEl.innerHTML = `
+    <div class="card">
+      <label class="field-label" for="topic-input">What do you want to read about?</label>
+      <input type="text" id="topic-input" placeholder="e.g. most money ever made in Fortnite" maxlength="200" value="${escapeHtml(state.topic)}" />
+      <div class="hint">Pick any topic you like — the dojo will turn it into a reading passage.</div>
+    </div>
+    <div class="card">
+      <label class="field-label">Choose your year level</label>
+      <div class="year-grid" id="year-grid">
+        ${YEAR_LEVELS.map(yl => `
+          <button type="button" class="year-btn ${state.year === yl.year ? 'selected' : ''}" data-year="${yl.year}">
+            <span class="yb-num">Y${yl.year}</span>
+            <span class="yb-age">${yl.age}</span>
+          </button>
+        `).join('')}
+      </div>
+      <div class="error">${escapeHtml(state.errorMsg)}</div>
+      <button class="btn-primary" id="start-btn">Generate My Passage</button>
+    </div>
+  `;
+
+  document.getElementById('topic-input').addEventListener('input', (e) => { state.topic = e.target.value; });
+  document.querySelectorAll('.year-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.year = parseInt(btn.dataset.year, 10);
+      document.querySelectorAll('.year-btn').forEach((b) => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    });
+  });
+  document.getElementById('start-btn').addEventListener('click', generatePassage);
+}
+
+async function generatePassage() {
+  const topic = state.topic.trim();
+  if (!topic) { setState({ errorMsg: 'Type a topic first.' }); return; }
+  if (!state.year) { setState({ errorMsg: 'Choose a year level.' }); return; }
+
+  setState({ screen: 'loading-passage', errorMsg: '' });
+
+  try {
+    const data = await authedFetch('/.netlify/functions/create-passage', {
+      method: 'POST',
+      body: JSON.stringify({ topic: topic, yearLevel: state.year }),
+    });
+    setState({
+      screen: 'passage',
+      session: data,
+      recording: false,
+      readingStats: null,
+      qIndex: 0,
+      answers: [],
+      quizResults: null,
+    });
+  } catch (e) {
+    setState({ screen: 'setup', errorMsg: e.blocked ? e.message : "Couldn't build that passage — try again." });
+  }
+}
+
+// ---------------- Loading ----------------
+function renderLoading(kind) {
+  screenEl.innerHTML = `<div class="card"><div class="loading-msg">${LOADING_MESSAGES[kind]}</div></div>`;
+}
+
+// ---------------- Passage + recording ----------------
+function renderPassage() {
+  const s = state.session;
+  screenEl.innerHTML = `
+    <div class="card">
+      <div class="passage-title">${escapeHtml(s.title)}</div>
+      <div class="passage-text">${escapeHtml(s.passage)}</div>
+    </div>
+    <div class="card record-wrap">
+      ${state.recording ? `
+        <div class="hint">Reading out loud — take your time, there's no time limit.</div>
+        <button class="record-btn recording" id="stop-btn">STOP</button>
+        <div class="record-timer" id="record-timer">${formatTime(state.elapsedSeconds)}</div>
+        <button class="btn-secondary" id="stop-btn-2">Finished Reading</button>
+      ` : `
+        <div class="hint">When you're ready, press record and read the passage above out loud.</div>
+        <button class="record-btn" id="start-record-btn">REC</button>
+      `}
+      <div class="error">${escapeHtml(state.errorMsg)}</div>
+    </div>
+  `;
+
+  if (state.recording) {
+    document.getElementById('stop-btn').addEventListener('click', stopRecording);
+    document.getElementById('stop-btn-2').addEventListener('click', stopRecording);
+  } else {
+    document.getElementById('start-record-btn').addEventListener('click', startRecording);
+  }
+}
+
+function formatTime(totalSeconds) {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return m + ':' + String(s).padStart(2, '0');
+}
+
+async function startRecording() {
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    setState({ errorMsg: 'Recording is not supported in this browser.' });
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    let mediaRecorder;
+    try { mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' }); }
+    catch (e) { mediaRecorder = new MediaRecorder(stream); }
+
+    state.mediaRecorder = mediaRecorder;
+    state.audioChunks = [];
+
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) state.audioChunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      handleRecordingStopped();
+    };
+
+    mediaRecorder.start();
+    state.recordStart = Date.now();
+    state.elapsedSeconds = 0;
+    clearInterval(state.recordTimer);
+    state.recordTimer = setInterval(() => {
+      state.elapsedSeconds = Math.floor((Date.now() - state.recordStart) / 1000);
+      const timerEl = document.getElementById('record-timer');
+      if (timerEl) timerEl.textContent = formatTime(state.elapsedSeconds);
+    }, 250);
+
+    setState({ recording: true, errorMsg: '' });
+  } catch (e) {
+    setState({ errorMsg: 'Microphone access is needed to read aloud — please allow it and try again.' });
+  }
+}
+
+function stopRecording() {
+  clearInterval(state.recordTimer);
+  if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
+    state.mediaRecorder.stop();
+  }
+}
+
+async function handleRecordingStopped() {
+  const durationMs = Date.now() - state.recordStart;
+  const mimeType = state.mediaRecorder.mimeType || 'audio/webm';
+  const blob = new Blob(state.audioChunks, { type: mimeType });
+
+  setState({ screen: 'scoring' });
+
+  try {
+    const audioBase64 = await blobToBase64(blob);
+    const result = await authedFetch('/.netlify/functions/transcribe-and-score', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: state.session.sessionId, audioBase64: audioBase64, mimeType: mimeType, durationMs: durationMs }),
+    });
+    setState({ screen: 'reading-results', readingStats: result });
+  } catch (e) {
+    setState({ screen: 'passage', recording: false, errorMsg: e.message || 'Something went wrong scoring your reading — try again.' });
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+// ---------------- Reading results ----------------
+function renderReadingResults() {
+  const r = state.readingStats;
+  screenEl.innerHTML = `
+    <div class="card">
+      <h2 style="text-align:center;">Reading Check Complete</h2>
+      <div class="stat-grid">
+        <div class="stat-box"><div class="stat-num">${r.wpm}</div><div class="stat-label">Words per minute</div></div>
+        <div class="stat-box"><div class="stat-num">${r.accuracyPct}%</div><div class="stat-label">Reading accuracy</div></div>
+      </div>
+      <div class="hint">This is a practice estimate — speech transcription isn't perfect, especially with fast or quiet reading.</div>
+      <button class="btn-primary" id="continue-to-quiz-btn">Continue to Questions</button>
+    </div>
+  `;
+  document.getElementById('continue-to-quiz-btn').addEventListener('click', () => {
+    setState({ screen: 'quiz', qIndex: 0, answers: [] });
+  });
+}
+
+// ---------------- Quiz ----------------
+function renderQuiz() {
+  const s = state.session;
+  const q = s.questions[state.qIndex];
+  const total = s.questions.length;
+  const isLast = state.qIndex === total - 1;
+  const existingAnswer = state.answers[state.qIndex];
+
+  const bodyHtml = q.type === 'multiple_choice'
+    ? `<div class="options" id="options-wrap">
+        ${q.options.map((opt, i) => `
+          <button type="button" class="option-btn ${existingAnswer && existingAnswer.answer == i ? 'selected' : ''}" data-idx="${i}">
+            <span class="opt-letter">${String.fromCharCode(65 + i)}</span>
+            <span>${escapeHtml(opt)}</span>
+          </button>
+        `).join('')}
+      </div>`
+    : `<textarea id="short-answer-input" placeholder="Type your answer...">${existingAnswer ? escapeHtml(existingAnswer.answer) : ''}</textarea>`;
+
+  screenEl.innerHTML = `
+    <div class="card">
+      <div class="quiz-top">
+        <div class="quiz-progress">Question ${state.qIndex + 1} of ${total}</div>
+      </div>
+      <div class="question-text">${escapeHtml(q.question)}</div>
+      ${bodyHtml}
+      <div class="error" id="quiz-error"></div>
+      <button class="btn-primary" id="quiz-next-btn">${isLast ? 'Submit Answers' : 'Next Question'}</button>
+      <div class="belt-wrap">
+        <div class="belt">
+          ${s.questions.map((_, i) => `<div class="stripe-slot ${state.answers[i] ? 'filled' : ''}"></div>`).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+
+  if (q.type === 'multiple_choice') {
+    document.querySelectorAll('.option-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.option-btn').forEach((b) => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        state.answers[state.qIndex] = { questionId: q.id, answer: btn.dataset.idx };
+      });
+    });
+  }
+
+  document.getElementById('quiz-next-btn').addEventListener('click', () => onQuizNext(q, isLast, total));
+}
+
+function onQuizNext(q, isLast, total) {
+  if (q.type === 'short_answer') {
+    const text = document.getElementById('short-answer-input').value.trim();
+    if (!text) { document.getElementById('quiz-error').textContent = 'Write an answer before continuing.'; return; }
+    state.answers[state.qIndex] = { questionId: q.id, answer: text };
+  } else if (!state.answers[state.qIndex]) {
+    document.getElementById('quiz-error').textContent = 'Pick an answer before continuing.';
+    return;
+  }
+
+  if (isLast) {
+    submitQuiz();
+  } else {
+    setState({ qIndex: state.qIndex + 1 });
+  }
+}
+
+async function submitQuiz() {
+  setState({ screen: 'grading' });
+  try {
+    const data = await authedFetch('/.netlify/functions/grade-comprehension', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: state.session.sessionId, answers: state.answers }),
+    });
+    setState({ screen: 'results', quizResults: data });
+  } catch (e) {
+    setState({ screen: 'quiz', qIndex: state.session.questions.length - 1, errorMsg: e.message || 'Something went wrong grading your answers — try again.' });
+  }
+}
+
+// ---------------- Results ----------------
+function renderResults() {
+  const s = state.session;
+  const results = state.quizResults;
+  const byId = Object.fromEntries(results.results.map((r) => [r.questionId, r]));
+
+  screenEl.innerHTML = `
+    <div class="card">
+      <h2 style="text-align:center;">${results.correctCount} / ${results.total} Correct</h2>
+      <div class="belt-wrap" style="margin-bottom:20px;">
+        <div class="belt">
+          ${results.results.map((r) => `<div class="stripe-slot ${r.isCorrect ? 'filled' : ''}"></div>`).join('')}
+        </div>
+      </div>
+      ${s.questions.map((q) => {
+        const r = byId[q.id];
+        if (!r) return '';
+        return `
+          <div style="margin-bottom:16px; padding-bottom:16px; border-bottom:1px solid rgba(255,255,255,0.08);">
+            <div style="font-weight:800; margin-bottom:6px;">${escapeHtml(q.question)}</div>
+            <div class="feedback ${r.isCorrect ? 'right' : 'wrong'}">${r.isCorrect ? 'Correct — ' : 'Not quite — '}${escapeHtml(r.feedback)}</div>
+          </div>
+        `;
+      }).join('')}
+      <button class="btn-primary" id="again-btn">Read Another Passage</button>
+      <a href="stats.html" class="btn-secondary" style="display:block; text-align:center; text-decoration:none; margin-top:12px;">View My Stats</a>
+    </div>
+  `;
+
+  document.getElementById('again-btn').addEventListener('click', () => {
+    setState({ screen: 'setup', topic: '', year: null, session: null, errorMsg: '' });
+  });
+}
+
+// ---------------- Boot ----------------
+(async function init() {
+  const session = await requireAuth();
+  if (!session) return;
+
+  document.getElementById('logout-btn').addEventListener('click', logout);
+
+  const { data: profile } = await sb.from('profiles').select('display_name').eq('id', session.user.id).maybeSingle();
+  document.getElementById('welcome-name').textContent = profile ? 'Welcome, ' + profile.display_name : '';
+
+  render();
+})();
+</script>
+</body>
+</html>

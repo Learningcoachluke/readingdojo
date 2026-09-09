@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reading Dojo — My Stats</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Permanent+Marker&family=Nunito:ital,wght@0,400;0,600;0,700;0,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared/theme.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="top-nav">
+    <a href="dojo.html" class="btn-secondary" style="text-decoration:none; display:inline-block;">&larr; Back to Dojo</a>
+    <button class="btn-secondary" id="logout-btn">Log out</button>
+  </div>
+  <div class="brand">📊 My Reading Stats</div>
+
+  <div class="card">
+    <h2 style="text-align:center; font-size:16px; color:var(--grey); text-transform:uppercase; letter-spacing:0.05em;">Overall</h2>
+    <div class="stat-grid">
+      <div class="stat-box"><div class="stat-num" id="overall-sessions">–</div><div class="stat-label">Passages read</div></div>
+      <div class="stat-box"><div class="stat-num" id="overall-words">–</div><div class="stat-label">Total words</div></div>
+      <div class="stat-box"><div class="stat-num" id="overall-accuracy">–</div><div class="stat-label">Avg accuracy</div></div>
+      <div class="stat-box"><div class="stat-num" id="overall-wpm">–</div><div class="stat-label">Avg words/min</div></div>
+    </div>
+  </div>
+
+  <div class="card" id="latest-card">
+    <h2 style="text-align:center; font-size:16px; color:var(--grey); text-transform:uppercase; letter-spacing:0.05em;">Latest Session</h2>
+    <div id="latest-body">
+      <div class="loading-msg">Loading...</div>
+    </div>
+  </div>
+</div>
+<script src="shared/supabase-client.js"></script>
+<script>
+  (async function init() {
+    const session = await requireAuth();
+    if (!session) return;
+
+    document.getElementById('logout-btn').addEventListener('click', logout);
+
+    const [{ data: overall }, { data: latestRows }] = await Promise.all([
+      sb.from('my_reading_stats').select('*').maybeSingle(),
+      sb.from('reading_sessions')
+        .select('topic,year_level,passage_title,word_count,accuracy_pct,wpm,reading_duration_seconds,created_at')
+        .eq('status', 'completed')
+        .order('created_at', { ascending: false })
+        .limit(1),
+    ]);
+
+    document.getElementById('overall-sessions').textContent = overall ? overall.session_count : 0;
+    document.getElementById('overall-words').textContent = overall ? overall.total_words : 0;
+    document.getElementById('overall-accuracy').textContent = overall && overall.avg_accuracy_pct != null ? overall.avg_accuracy_pct + '%' : '—';
+    document.getElementById('overall-wpm').textContent = overall && overall.avg_wpm != null ? overall.avg_wpm : '—';
+
+    const latest = latestRows && latestRows[0];
+    const latestBody = document.getElementById('latest-body');
+    if (!latest) {
+      latestBody.innerHTML = '<div class="hint" style="text-align:center;">No completed sessions yet — go read a passage!</div>';
+      return;
+    }
+    latestBody.innerHTML =
+      '<div class="passage-title" style="font-size:18px;">' + escapeHtml(latest.passage_title || latest.topic) + '</div>' +
+      '<div class="hint" style="margin-bottom:14px;">Year ' + latest.year_level + ' &middot; ' + escapeHtml(latest.topic) + '</div>' +
+      '<div class="stat-grid">' +
+        '<div class="stat-box"><div class="stat-num">' + (latest.wpm != null ? latest.wpm : '—') + '</div><div class="stat-label">Words/min</div></div>' +
+        '<div class="stat-box"><div class="stat-num">' + (latest.accuracy_pct != null ? latest.accuracy_pct + '%' : '—') + '</div><div class="stat-label">Accuracy</div></div>' +
+      '</div>';
+  })();
+</script>
+</body>
+</html>
