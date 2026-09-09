@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reading Dojo — Coach Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Permanent+Marker&family=Nunito:ital,wght@0,400;0,600;0,700;0,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared/theme.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+</head>
+<body>
+<div class="wrap" style="max-width:720px;">
+  <div class="top-nav">
+    <span class="welcome">Coach Dashboard</span>
+    <button class="btn-secondary" id="logout-btn">Log out</button>
+  </div>
+  <div class="brand">🥋 Reading Dojo</div>
+
+  <div class="card" id="reveal-card" hidden>
+    <div class="field-label" style="text-align:left; margin-bottom:8px;">Login details</div>
+    <div id="reveal-body"></div>
+    <button class="btn-secondary" id="reveal-dismiss-btn">Got it</button>
+  </div>
+
+  <div class="card">
+    <label class="field-label" for="new-student-name">Add a student</label>
+    <input type="text" id="new-student-name" placeholder="Student's name" maxlength="60" />
+    <div class="error" id="create-error"></div>
+    <button class="btn-primary" id="create-btn">Create Account</button>
+  </div>
+
+  <div class="card">
+    <div class="field-label" style="text-align:left;">Students</div>
+    <div id="roster-body">
+      <div class="loading-msg">Loading...</div>
+    </div>
+  </div>
+</div>
+<script src="shared/supabase-client.js"></script>
+<script>
+let students = [];
+
+(async function init() {
+  const session = await requireAuth();
+  if (!session) return;
+
+  const { data: profile } = await sb.from('profiles').select('is_admin').eq('id', session.user.id).maybeSingle();
+  if (!profile || !profile.is_admin) {
+    window.location.href = '/dojo.html';
+    return;
+  }
+
+  document.getElementById('logout-btn').addEventListener('click', logout);
+  document.getElementById('create-btn').addEventListener('click', createStudent);
+  document.getElementById('new-student-name').addEventListener('keydown', function (e) { if (e.key === 'Enter') createStudent(); });
+  document.getElementById('reveal-dismiss-btn').addEventListener('click', function () {
+    document.getElementById('reveal-card').hidden = true;
+  });
+
+  await loadStudents();
+})();
+
+async function loadStudents() {
+  const rosterBody = document.getElementById('roster-body');
+  rosterBody.innerHTML = '<div class="loading-msg">Loading...</div>';
+  try {
+    const data = await authedFetch('/.netlify/functions/admin-list-students', { method: 'POST' });
+    students = data.students;
+    renderRoster();
+  } catch (e) {
+    rosterBody.innerHTML = '<div class="error">' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function renderRoster() {
+  const rosterBody = document.getElementById('roster-body');
+  if (students.length === 0) {
+    rosterBody.innerHTML = '<div class="hint">No students yet — add one above.</div>';
+    return;
+  }
+  rosterBody.innerHTML =
+    '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:14px;">' +
+    '<thead><tr style="text-align:left; color:var(--grey); font-size:12px; text-transform:uppercase;">' +
+    '<th style="padding:8px 6px;">Name</th><th style="padding:8px 6px;">Username</th><th style="padding:8px 6px;">Sessions</th>' +
+    '<th style="padding:8px 6px;">Accuracy</th><th style="padding:8px 6px;">WPM</th><th style="padding:8px 6px;"></th></tr></thead><tbody>' +
+    students
+      .map(
+        (s) => `
+      <tr style="border-top:1px solid rgba(255,255,255,0.08);">
+        <td style="padding:10px 6px; font-weight:700;">${escapeHtml(s.displayName)}</td>
+        <td style="padding:10px 6px; color:var(--grey);">${escapeHtml(s.username)}</td>
+        <td style="padding:10px 6px;">${s.sessionCount}</td>
+        <td style="padding:10px 6px;">${s.avgAccuracyPct != null ? s.avgAccuracyPct + '%' : '—'}</td>
+        <td style="padding:10px 6px;">${s.avgWpm != null ? s.avgWpm : '—'}</td>
+        <td style="padding:10px 6px; white-space:nowrap;">
+          <button class="btn-secondary reset-pin-btn" data-id="${s.id}" data-name="${escapeHtml(s.displayName)}" style="width:auto; margin:0 4px 0 0; padding:6px 10px; font-size:11px;">Reset PIN</button>
+          <button class="btn-danger delete-btn" data-id="${s.id}" data-name="${escapeHtml(s.displayName)}" style="width:auto; margin:0; padding:6px 10px; font-size:11px;">Delete</button>
+        </td>
+      </tr>
+    `
+      )
+      .join('') +
+    '</tbody></table></div>';
+
+  document.querySelectorAll('.reset-pin-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () { resetPin(btn.dataset.id, btn.dataset.name); });
+  });
+  document.querySelectorAll('.delete-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () { deleteStudent(btn.dataset.id, btn.dataset.name); });
+  });
+}
+
+async function createStudent() {
+  const errEl = document.getElementById('create-error');
+  errEl.textContent = '';
+  const nameInput = document.getElementById('new-student-name');
+  const displayName = nameInput.value.trim();
+  if (!displayName) { errEl.textContent = 'Enter a name.'; return; }
+
+  const btn = document.getElementById('create-btn');
+  btn.disabled = true;
+  try {
+    const result = await authedFetch('/.netlify/functions/admin-create-student', {
+      method: 'POST',
+      body: JSON.stringify({ displayName: displayName }),
+    });
+    showReveal(result.displayName, result.username, result.pin, 'Account created');
+    nameInput.value = '';
+    await loadStudents();
+  } catch (e) {
+    errEl.textContent = e.message || 'Something went wrong.';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function resetPin(studentId, displayName) {
+  if (!confirm("Reset the PIN for " + displayName + "? Their old PIN will stop working immediately.")) return;
+  try {
+    const result = await authedFetch('/.netlify/functions/admin-reset-pin', {
+      method: 'POST',
+      body: JSON.stringify({ studentId: studentId }),
+    });
+    const student = students.find(function (s) { return s.id === studentId; });
+    showReveal(displayName, student ? student.username : '', result.pin, 'PIN reset');
+  } catch (e) {
+    alert(e.message || 'Something went wrong.');
+  }
+}
+
+async function deleteStudent(studentId, displayName) {
+  if (!confirm("Permanently delete " + displayName + "'s account and all their reading history? This cannot be undone.")) return;
+  try {
+    await authedFetch('/.netlify/functions/admin-delete-student', {
+      method: 'POST',
+      body: JSON.stringify({ studentId: studentId }),
+    });
+    await loadStudents();
+  } catch (e) {
+    alert(e.message || 'Something went wrong.');
+  }
+}
+
+function showReveal(displayName, username, pin, heading) {
+  document.getElementById('reveal-body').innerHTML =
+    '<div style="margin-bottom:10px;">' + escapeHtml(heading) + ' for <strong>' + escapeHtml(displayName) + '</strong>:</div>' +
+    '<div class="stat-grid">' +
+    '<div class="stat-box"><div class="stat-num" style="font-size:20px;">' + escapeHtml(username) + '</div><div class="stat-label">Username</div></div>' +
+    '<div class="stat-box"><div class="stat-num" style="font-size:20px;">' + escapeHtml(pin) + '</div><div class="stat-label">PIN</div></div>' +
+    '</div><div class="hint">Write this down now — it won\'t be shown again.</div>';
+  document.getElementById('reveal-card').hidden = false;
+  document.getElementById('reveal-card').scrollIntoView({ behavior: 'smooth' });
+}
+</script>
+</body>
+</html>

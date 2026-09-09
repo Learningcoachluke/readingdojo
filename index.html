@@ -25,8 +25,13 @@
 <script>
   (async function init() {
     const { data: { session } } = await sb.auth.getSession();
-    if (session) window.location.href = "/dojo.html";
+    if (session) await redirectAfterLogin(session);
   })();
+
+  async function redirectAfterLogin(session) {
+    const { data: profile } = await sb.from('profiles').select('is_admin').eq('id', session.user.id).maybeSingle();
+    window.location.href = profile && profile.is_admin ? '/admin.html' : '/dojo.html';
+  }
 
   document.getElementById('login-btn').addEventListener('click', login);
   document.getElementById('pin').addEventListener('keydown', function (e) { if (e.key === 'Enter') login(); });
@@ -44,7 +49,7 @@
     btn.textContent = 'Checking...';
 
     const email = username + '@reading.blackbelt';
-    const { error } = await sb.auth.signInWithPassword({ email: email, password: pin });
+    const { data, error } = await sb.auth.signInWithPassword({ email: email, password: pin });
 
     btn.disabled = false;
     btn.textContent = 'Enter the Dojo';
@@ -53,7 +58,7 @@
       errEl.textContent = "That username or PIN isn't right — check with your coach.";
       return;
     }
-    window.location.href = "/dojo.html";
+    await redirectAfterLogin(data.session);
   }
 </script>
 </body>

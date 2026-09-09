@@ -7,6 +7,7 @@ create table public.profiles (
   username     text unique not null,     -- e.g. "jake-t" — used to build the synthetic login email
   display_name text not null,            -- e.g. "Jake"
   active       boolean not null default true,
+  is_admin     boolean not null default false,  -- true only for the coach account
   created_at   timestamptz not null default now()
 );
 alter table public.profiles enable row level security;

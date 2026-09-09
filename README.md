@@ -28,12 +28,18 @@ Do this once in the [Supabase dashboard](https://supabase.com/dashboard/project/
 The frontend's Supabase URL/anon key are hardcoded in `shared/supabase-client.js` — safe to be public, since access is controlled by Row Level Security, not secrecy.
 
 ## Provisioning boy accounts
+**Preferred: the coach dashboard** (`/admin.html`) — log in with the coach account, add students by name one at a time, see everyone's stats, reset a PIN, or delete an account. This is the normal day-to-day path; the account is flagged via `profiles.is_admin`.
+
+**Bulk alternative** (e.g. onboarding the first 40 in one go):
 1. Fill in `admin/boys-roster.csv` (`username,display_name`, one boy per row).
 2. Run: `SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node admin/create-boys.js`
 3. Hand out the logins from the generated `admin/boys-credentials-output.csv` (gitignored — never commit it). Login is `username` + the 6-digit PIN.
 
 ## Closing an account
-Supabase dashboard → Authentication → Users → ban or delete the boy's row. No custom admin UI — this is a rare, low-volume action for ~40 accounts.
+Either the coach dashboard's Delete button, or Supabase dashboard → Authentication → Users → ban/delete the boy's row directly.
+
+## PINs can't be "looked up" once set
+Supabase stores them as a one-way hash, like any password — nobody, including the coach dashboard, can retrieve an existing PIN. "Reset PIN" generates and shows a brand-new one instead; that's the only way to recover access for a boy who forgot his.
 
 ## Local development
 ```
