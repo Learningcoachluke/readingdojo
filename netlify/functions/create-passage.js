@@ -133,8 +133,8 @@ Rules:
 - Keep it free of explicit sexual content, sexual content involving minors, graphic gore or extreme violence, hate speech, self-harm promotion, illegal drug instructions, and swearing. Mild peril, competitive/game violence, and gross-out humor are all fine.
 ${strict ? "- The previous attempt was flagged as inappropriate. Be noticeably more conservative this time while still being fun and on-topic.\n" : ""}- If the requested topic is unsafe or not age-appropriate, quietly redirect to the closest safe, appropriate angle on that topic without mentioning that you changed it.
 - Match reading difficulty (vocabulary, sentence length, sentence complexity, idea density) to the given year level. Year 9-10 passages can use longer sentences and more sophisticated vocabulary and ideas than Year 2-4.
-- Output ONLY valid JSON, no markdown fences, no commentary, matching exactly this shape:
-{"title":"string","passage":"string with paragraphs separated by a blank line","questions":[{"type":"multiple_choice","question":"string","options":["string","string","string","string"],"correctIndex":0,"explanation":"one short sentence, under 15 words"}]}
+- Output ONLY valid JSON as a single line, no markdown fences, no commentary, matching exactly this shape:
+{"title":"string","passage":"string; use the two-character escape sequence \\n\\n between paragraphs — do NOT put a literal line break inside the JSON string, it must stay valid single-line JSON","questions":[{"type":"multiple_choice","question":"string","options":["string","string","string","string"],"correctIndex":0,"explanation":"one short sentence, under 15 words"}]}
   (short-answer questions instead use: {"type":"short_answer","question":"string","modelAnswer":"string — a full reference answer for grading","explanation":"one short sentence, under 15 words"})
 - Write exactly ${multipleChoiceCount} questions with "type":"multiple_choice" and exactly ${shortAnswerCount} questions with "type":"short_answer", in any order.
 - Base questions on a mix of literal recall, vocabulary-in-context, and (for year 5+) inference; for year 7+ also include some analysis/author's-purpose style questions. Keep wording age-appropriate.
@@ -172,16 +172,30 @@ ${strict ? "- The previous attempt was flagged as inappropriate. Be noticeably m
 
   if (!raw) throw new Error("Empty response while generating the passage.");
 
+  // Despite the prompt instruction, the model sometimes writes a literal
+  // newline inside a string value (e.g. between passage paragraphs) instead
+  // of the escaped \n sequence, which is invalid JSON. Escape any raw
+  // control characters found INSIDE string literals before parsing —
+  // tracking string boundaries so we never touch structural whitespace
+  // outside strings.
+  raw = escapeControlCharsInStrings(raw);
+
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch (e) {
     const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("The passage response wasn't valid JSON.");
+    if (!match) {
+      throw new Error(
+        `The passage response wasn't valid JSON (stop_reason=${data.stop_reason}). Raw: ${raw.slice(0, 500)}`
+      );
+    }
     try {
       parsed = JSON.parse(match[0]);
     } catch (e2) {
-      throw new Error("The passage response wasn't valid JSON, even after cleanup.");
+      throw new Error(
+        `The passage response wasn't valid JSON, even after cleanup (stop_reason=${data.stop_reason}, parse error: ${e2.message}). Raw: ${raw.slice(0, 800)}`
+      );
     }
   }
 
@@ -190,4 +204,42 @@ ${strict ? "- The previous attempt was flagged as inappropriate. Be noticeably m
   }
 
   return parsed;
+}
+
+// Walks the text tracking whether we're inside a JSON string literal
+// (respecting backslash escapes), and escapes raw control characters
+// (newline/tab/carriage-return) only when found inside one. Leaves
+// structural whitespace between JSON tokens untouched.
+function escapeControlCharsInStrings(text) {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        result += ch;
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        result += ch;
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        result += ch;
+        inString = false;
+        continue;
+      }
+      if (ch === "\n") { result += "\\n"; continue; }
+      if (ch === "\r") { result += "\\r"; continue; }
+      if (ch === "\t") { result += "\\t"; continue; }
+      result += ch;
+    } else {
+      if (ch === '"') inString = true;
+      result += ch;
+    }
+  }
+  return result;
 }
