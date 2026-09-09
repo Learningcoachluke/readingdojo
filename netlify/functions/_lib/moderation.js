@@ -31,9 +31,15 @@ const SOFT_FLAG_CATEGORIES = [
 
 // Small, deliberately short list — defense-in-depth on top of the
 // Moderation API, not a substitute for it. Whole-word, case-insensitive.
+// Deliberately excludes words that double as common names/animals/objects
+// (e.g. "dick", "cock", "pussy") — tested against real phrases ("Moby Dick
+// is a novel", "the cockpit was loud", "a pussy willow") and those produced
+// false positives, which cuts against the explicit "don't over-block"
+// calibration. The Moderation API's "sexual"/"harassment" categories still
+// catch genuinely inappropriate uses of those words in context.
 const PROFANITY_WORDS = [
-  "fuck", "shit", "bitch", "asshole", "cunt", "dick", "piss", "bastard",
-  "slut", "whore", "nigger", "faggot", "retard", "cock", "pussy",
+  "fuck", "shit", "bitch", "asshole", "cunt", "piss", "bastard",
+  "slut", "whore", "nigger", "faggot", "retard",
 ];
 const PROFANITY_RE = new RegExp(`\\b(${PROFANITY_WORDS.join("|")})\\b`, "i");
 
