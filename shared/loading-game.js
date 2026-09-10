@@ -1,12 +1,10 @@
-// loading-game.js — a tiny, dependency-free drag-to-shoot basketball
-// mini-game shown during the app's loading screens (passage generation,
-// reading scoring, comprehension grading) so the wait feels shorter. Pure
-// <canvas> + vanilla JS, no images/libraries — it injects its own <style>
-// tag on first use, so it's a genuine drop-in component: any page can
-// mount it without already having matching CSS loaded. The court, hoop
-// and ball are all drawn with canvas primitives (no image assets), and
-// the score chime is synthesized with the Web Audio API, keeping this a
-// single, asset-free file.
+// loading-game.js — a tiny drag-to-shoot basketball mini-game shown during
+// the app's loading screens (passage generation, reading scoring,
+// comprehension grading) so the wait feels shorter. The court, hoop and
+// ball are Luke's own cutout artwork (shared/img/*.png, transparent PNGs)
+// composited onto a <canvas> — no framework, no build step. The score
+// chime is synthesized with the Web Audio API, so the only network assets
+// this file needs are those three images.
 //
 // Usage:
 //   const game = LoadingGame.mount(containerEl);
@@ -35,6 +33,24 @@
     document.head.appendChild(style);
   }
 
+  // ---- Art assets. Loaded once at script-load time (not per mount) so
+  // every loading screen after the first reuses the same cached, already
+  // -decoded <img> elements instead of re-requesting them. Paths are
+  // resolved against the page, matching how dojo.html already references
+  // shared/loading-game.js and shared/theme.css. ----
+  var ASSET_BASE = "shared/img/";
+  var ASSETS = {
+    court: new Image(),
+    hoop: new Image(),
+    ball: new Image(),
+  };
+  ASSETS.court.src = ASSET_BASE + "court.png";
+  ASSETS.hoop.src = ASSET_BASE + "hoop.png";
+  ASSETS.ball.src = ASSET_BASE + "ball.png";
+  function imgReady(img) {
+    return img.complete && img.naturalWidth > 0;
+  }
+
   // ---- Tunable constants (all physics is time-based — px per
   // millisecond — rather than per-frame, so the game plays at the same
   // speed and difficulty regardless of the device's actual frame rate) ----
@@ -43,25 +59,40 @@
   var MIN_DRAG = 10; // px — shorter drags are treated as a cancelled shot
   var MAX_DRAG = 90; // px — pulling further than this doesn't add more power
   var BALL_RADIUS = 8;
-  var HOOP_RIGHT_MARGIN = 14; // backboard's distance from the canvas's right edge
-  var BACKBOARD_WIDTH = 4;
-  var BACKBOARD_TOP = 10;
-  var BACKBOARD_HEIGHT = 32;
-  var RIM_WIDTH = 34; // how far the rim sticks out to the left of the backboard
-  var RIM_DROP = 6; // rim's distance below the top of the backboard
-  var POST_RADIUS = 2.5; // collision radius of each rim tip
   var BOUNCE_RESTITUTION = 0.45; // velocity retained (and reflected) on a rim/backboard hit
+  var POST_RADIUS = 2.5; // collision radius of each rim tip
+  var BACKBOARD_COLLISION_DEPTH = 6; // how deep the backboard's front-face collision plane reaches
 
-  // ---- Court geometry: a simple trapezoid standing in for a full court
-  // viewed end-on-ish, wide at the near (bottom) baseline and narrower at
-  // the far (top) baseline. The hoop stands just beyond the court's right
-  // edge, matching a real court where the basket overhangs the baseline. ----
-  var COURT_TOP_Y = 22;
-  var COURT_BOTTOM_MARGIN = 8;
-  var COURT_TOP_LEFT_FRAC = 0.3;
-  var COURT_TOP_RIGHT_FRAC = 0.66;
-  var COURT_BOTTOM_LEFT_FRAC = 0.02;
-  var COURT_BOTTOM_RIGHT_FRAC = 0.97;
+  // ---- Hoop sprite geometry (shared/img/hoop.png, 350x537). These
+  // fractions were measured directly off the artwork (where the backboard
+  // and rim actually sit within the transparent canvas) so the physics
+  // lines up with what's drawn regardless of what size we render it at. ----
+  var HOOP_ASPECT = 350 / 537;
+  var HOOP_TOP_MARGIN = 4;
+  var HOOP_BOTTOM_MARGIN = 4;
+  var HOOP_RIGHT_MARGIN = 10;
+  var BACKBOARD_LEFT_FRAC = 0.371;
+  var BACKBOARD_RIGHT_FRAC = 0.653;
+  var BACKBOARD_TOP_FRAC = 0.02;
+  var BACKBOARD_BOTTOM_FRAC = 0.343;
+  var RIM_Y_FRAC = 0.371;
+  var RIM_LEFT_FRAC = 0.005;
+  var RIM_RIGHT_FRAC = 0.371;
+
+  // ---- Court sprite geometry (shared/img/court.png, 1400x583). The
+  // floor is measured the same way: these fractions are where the actual
+  // wood trapezoid sits within the image, so "anywhere on the court" can
+  // be computed after the background is fit to the canvas (see
+  // courtGeometry() below, which maps these through the same cover-fit
+  // transform used to draw it). ----
+  var COURT_IMG_W = 1400;
+  var COURT_IMG_H = 583;
+  var COURT_TOP_Y_FRAC = 0.376;
+  var COURT_TOP_LEFT_X_FRAC = 0.154;
+  var COURT_TOP_RIGHT_X_FRAC = 0.845;
+  var COURT_BOTTOM_Y_FRAC = 0.99;
+  var COURT_BOTTOM_LEFT_X_FRAC = 0.01;
+  var COURT_BOTTOM_RIGHT_X_FRAC = 0.99;
 
   function mount(container) {
     ensureStyles();
@@ -79,16 +110,6 @@
 
     var ctx = canvas.getContext("2d");
 
-    // Court corners, recomputed on resize from the canvas's current CSS
-    // size. courtXBoundsAtY() interpolates the left/right playing-floor
-    // edge for any y between the far and near baselines.
-    var courtTopY = COURT_TOP_Y;
-    var courtBottomY = 120;
-    var courtTopLeftX = 0;
-    var courtTopRightX = 0;
-    var courtBottomLeftX = 0;
-    var courtBottomRightX = 0;
-
     // Canvas internal resolution follows its CSS box size (and device
     // pixel ratio) so drawing stays crisp without manually scaling shapes.
     function resize() {
@@ -97,39 +118,64 @@
       canvas.width = Math.round(rect.width * dpr);
       canvas.height = Math.round(rect.height * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      courtBottomY = rect.height - COURT_BOTTOM_MARGIN;
-      courtTopY = COURT_TOP_Y;
-      courtTopLeftX = rect.width * COURT_TOP_LEFT_FRAC;
-      courtTopRightX = rect.width * COURT_TOP_RIGHT_FRAC;
-      courtBottomLeftX = rect.width * COURT_BOTTOM_LEFT_FRAC;
-      courtBottomRightX = rect.width * COURT_BOTTOM_RIGHT_FRAC;
+      ctx.imageSmoothingQuality = "high";
     }
 
-    function courtXBoundsAtY(y) {
-      var span = courtBottomY - courtTopY;
-      var t = span > 0 ? (y - courtTopY) / span : 0;
-      if (t < 0) t = 0;
-      if (t > 1) t = 1;
+    // Where the background photo lands once scaled to "cover" the canvas
+    // (same maths as CSS background-size:cover) — used both to draw it
+    // and to map the court's measured floor fractions into canvas space.
+    function courtCoverRect(w, h) {
+      var scale = Math.max(w / COURT_IMG_W, h / COURT_IMG_H);
+      var dw = COURT_IMG_W * scale;
+      var dh = COURT_IMG_H * scale;
+      return { x: (w - dw) / 2, y: (h - dh) / 2, w: dw, h: dh };
+    }
+
+    function courtGeometry() {
+      var rect = canvas.getBoundingClientRect();
+      var cover = courtCoverRect(rect.width, rect.height);
       return {
-        left: courtTopLeftX + (courtBottomLeftX - courtTopLeftX) * t,
-        right: courtTopRightX + (courtBottomRightX - courtTopRightX) * t,
+        topY: cover.y + COURT_TOP_Y_FRAC * cover.h,
+        bottomY: cover.y + COURT_BOTTOM_Y_FRAC * cover.h,
+        topLeftX: cover.x + COURT_TOP_LEFT_X_FRAC * cover.w,
+        topRightX: cover.x + COURT_TOP_RIGHT_X_FRAC * cover.w,
+        bottomLeftX: cover.x + COURT_BOTTOM_LEFT_X_FRAC * cover.w,
+        bottomRightX: cover.x + COURT_BOTTOM_RIGHT_X_FRAC * cover.w,
       };
     }
 
-    // Hoop geometry, derived from the canvas's current width so it holds
-    // up across different container sizes. Recomputed on demand (cheap)
-    // rather than cached, so a resize is reflected immediately.
-    function hoopGeometry() {
-      var w = canvas.getBoundingClientRect().width;
-      var backboardX = w - HOOP_RIGHT_MARGIN - BACKBOARD_WIDTH;
-      var rimY = BACKBOARD_TOP + RIM_DROP;
+    function courtXBoundsAtY(court, y) {
+      var span = court.bottomY - court.topY;
+      var t = span > 0 ? (y - court.topY) / span : 0;
+      if (t < 0) t = 0;
+      if (t > 1) t = 1;
       return {
-        backboardX: backboardX,
-        backboardTop: BACKBOARD_TOP,
-        backboardBottom: BACKBOARD_TOP + BACKBOARD_HEIGHT,
-        rimY: rimY,
-        rimLeftX: backboardX - RIM_WIDTH,
-        rimRightX: backboardX,
+        left: court.topLeftX + (court.bottomLeftX - court.topLeftX) * t,
+        right: court.topRightX + (court.bottomRightX - court.topRightX) * t,
+      };
+    }
+
+    // Hoop sprite placement + the collision points calibrated against it.
+    // Recomputed on demand (cheap) rather than cached, so a resize is
+    // reflected immediately.
+    function hoopGeometry() {
+      var rect = canvas.getBoundingClientRect();
+      var spriteH = rect.height - HOOP_TOP_MARGIN - HOOP_BOTTOM_MARGIN;
+      var spriteW = spriteH * HOOP_ASPECT;
+      var spriteX = rect.width - HOOP_RIGHT_MARGIN - spriteW;
+      var spriteY = HOOP_TOP_MARGIN;
+      return {
+        spriteX: spriteX,
+        spriteY: spriteY,
+        spriteW: spriteW,
+        spriteH: spriteH,
+        backboardLeft: spriteX + BACKBOARD_LEFT_FRAC * spriteW,
+        backboardRight: spriteX + BACKBOARD_RIGHT_FRAC * spriteW,
+        backboardTop: spriteY + BACKBOARD_TOP_FRAC * spriteH,
+        backboardBottom: spriteY + BACKBOARD_BOTTOM_FRAC * spriteH,
+        rimY: spriteY + RIM_Y_FRAC * spriteH,
+        rimLeftX: spriteX + RIM_LEFT_FRAC * spriteW,
+        rimRightX: spriteX + RIM_RIGHT_FRAC * spriteW,
       };
     }
 
@@ -153,13 +199,14 @@
     // Picks a random resting spot anywhere on the court floor (avoiding
     // the hoop itself so the ball never respawns stuck under the rim).
     function respawnBall() {
+      var court = courtGeometry();
       var hoop = hoopGeometry();
       var x = 0;
       var y = 0;
       var tries;
       for (tries = 0; tries < 12; tries++) {
-        y = courtTopY + Math.random() * (courtBottomY - courtTopY);
-        var bounds = courtXBoundsAtY(y);
+        y = court.topY + Math.random() * (court.bottomY - court.topY);
+        var bounds = courtXBoundsAtY(court, y);
         var usable = Math.max(1, bounds.right - bounds.left - BALL_RADIUS * 2);
         x = bounds.left + BALL_RADIUS + Math.random() * usable;
         var nearHoop = x > hoop.rimLeftX - 24 && y < hoop.backboardBottom + 20;
@@ -242,15 +289,16 @@
     function updateFlying(dt, prevY) {
       var hoop = hoopGeometry();
 
-      // Backboard: a thin vertical wall — bounce the ball back leftward
-      // if it's overlapping it and still travelling toward it.
+      // Backboard: a thin vertical wall at its front (left) face — bounce
+      // the ball back leftward if it's overlapping that face and still
+      // travelling toward it.
       var nearBackboardX =
-        ball.x + BALL_RADIUS > hoop.backboardX &&
-        ball.x - BALL_RADIUS < hoop.backboardX + BACKBOARD_WIDTH &&
+        ball.x + BALL_RADIUS > hoop.backboardLeft &&
+        ball.x - BALL_RADIUS < hoop.backboardLeft + BACKBOARD_COLLISION_DEPTH &&
         ball.y > hoop.backboardTop &&
         ball.y < hoop.backboardBottom;
       if (nearBackboardX && ball.vx > 0) {
-        ball.x = hoop.backboardX - BALL_RADIUS;
+        ball.x = hoop.backboardLeft - BALL_RADIUS;
         ball.vx = -ball.vx * BOUNCE_RESTITUTION;
         hoopShakeMag = 1;
       }
@@ -314,10 +362,8 @@
       var w = rect.width;
       var h = rect.height;
       ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, w, h);
 
-      drawCourt();
+      drawCourt(w, h);
       drawHoop();
       drawAimLine();
       drawBall();
@@ -326,131 +372,32 @@
       ctx.fillStyle = "#f0f0f0";
       ctx.font = "600 13px -apple-system, BlinkMacSystemFont, sans-serif";
       ctx.textAlign = "left";
+      ctx.shadowColor = "rgba(0,0,0,0.6)";
+      ctx.shadowBlur = 3;
       ctx.fillText("Score: " + score, 10, 18);
+      ctx.shadowBlur = 0;
 
       drawScorePopup();
     }
 
-    function courtPath() {
-      ctx.beginPath();
-      ctx.moveTo(courtTopLeftX, courtTopY);
-      ctx.lineTo(courtTopRightX, courtTopY);
-      ctx.lineTo(courtBottomRightX, courtBottomY);
-      ctx.lineTo(courtBottomLeftX, courtBottomY);
-      ctx.closePath();
-    }
-
-    // A simplified wood court: a shaded trapezoid floor with a few plank
-    // streaks, a border, a center circle, a halfway line and two small
-    // key rectangles near the baselines — enough to read as a court at
-    // this size without drawing every real marking.
-    function drawCourt() {
-      ctx.save();
-      courtPath();
-      var grad = ctx.createLinearGradient(0, courtTopY, 0, courtBottomY);
-      grad.addColorStop(0, "#a97c49");
-      grad.addColorStop(1, "#caa06c");
-      ctx.fillStyle = grad;
-      ctx.fill();
-      ctx.clip();
-
-      ctx.strokeStyle = "rgba(0,0,0,0.08)";
-      ctx.lineWidth = 1;
-      var planks = 7;
-      var i;
-      for (i = 1; i < planks; i++) {
-        var t = i / planks;
-        var topX = courtTopLeftX + (courtTopRightX - courtTopLeftX) * t;
-        var botX = courtBottomLeftX + (courtBottomRightX - courtBottomLeftX) * t;
-        ctx.beginPath();
-        ctx.moveTo(topX, courtTopY);
-        ctx.lineTo(botX, courtBottomY);
-        ctx.stroke();
+    function drawCourt(w, h) {
+      if (!imgReady(ASSETS.court)) {
+        ctx.fillStyle = "#a97c49"; // plain wood-tone placeholder for the one frame before the photo loads
+        ctx.fillRect(0, 0, w, h);
+        return;
       }
-
-      ctx.strokeStyle = "rgba(255,255,255,0.85)";
-      ctx.lineWidth = 1.5;
-
-      var midTopX = (courtTopLeftX + courtTopRightX) / 2;
-      var midBotX = (courtBottomLeftX + courtBottomRightX) / 2;
-      ctx.beginPath();
-      ctx.moveTo(midTopX, courtTopY);
-      ctx.lineTo(midBotX, courtBottomY);
-      ctx.stroke();
-
-      var midY = (courtTopY + courtBottomY) / 2;
-      var midBounds = courtXBoundsAtY(midY);
-      var midWidth = midBounds.right - midBounds.left;
-      var cx = (midBounds.left + midBounds.right) / 2;
-      var crx = midWidth * 0.12;
-      ctx.beginPath();
-      ctx.ellipse(cx, midY, crx, crx * 0.55, 0, 0, Math.PI * 2);
-      ctx.stroke();
-
-      var laneWidth = midWidth * 0.11;
-      var laneDepth = (courtBottomY - courtTopY) * 0.4;
-      ctx.strokeRect(midBounds.left, midY - laneDepth / 2, laneWidth, laneDepth);
-      ctx.strokeRect(midBounds.right - laneWidth, midY - laneDepth / 2, laneWidth, laneDepth);
-
-      ctx.restore();
-
-      ctx.strokeStyle = "rgba(255,255,255,0.85)";
-      ctx.lineWidth = 1.5;
-      courtPath();
-      ctx.stroke();
+      var cover = courtCoverRect(w, h);
+      ctx.drawImage(ASSETS.court, cover.x, cover.y, cover.w, cover.h);
     }
 
     function drawHoop() {
+      if (!imgReady(ASSETS.hoop)) return;
       var hoop = hoopGeometry();
-      var rect = canvas.getBoundingClientRect();
       var shakeX = hoopShakeMag > 0 ? (Math.random() - 0.5) * 5 * hoopShakeMag : 0;
       var shakeY = hoopShakeMag > 0 ? (Math.random() - 0.5) * 3 * hoopShakeMag : 0;
-
       ctx.save();
       ctx.translate(shakeX, shakeY);
-
-      // Support pole running down to the court's near-right corner.
-      ctx.strokeStyle = "#8d8d8d";
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(hoop.backboardX + BACKBOARD_WIDTH + 1, hoop.backboardTop + 6);
-      ctx.lineTo(rect.width - 5, rect.height - 6);
-      ctx.stroke();
-
-      // Backboard
-      ctx.fillStyle = "#f5f5f0";
-      ctx.strokeStyle = "#8d8d8d";
-      ctx.lineWidth = 1;
-      ctx.fillRect(hoop.backboardX, hoop.backboardTop, BACKBOARD_WIDTH, BACKBOARD_HEIGHT);
-      ctx.strokeRect(hoop.backboardX, hoop.backboardTop, BACKBOARD_WIDTH, BACKBOARD_HEIGHT);
-
-      // Rim — a thin ellipse to suggest the ring viewed at an angle
-      var rimCx = (hoop.rimLeftX + hoop.rimRightX) / 2;
-      var rimRx = (hoop.rimRightX - hoop.rimLeftX) / 2;
-      ctx.strokeStyle = "#ff5a1f";
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.ellipse(rimCx, hoop.rimY, rimRx, 3, 0, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // Net — a few simple lines hanging from the rim, tapering inward
-      ctx.strokeStyle = "rgba(245,245,245,0.6)";
-      ctx.lineWidth = 1;
-      var strands = 5;
-      var i;
-      for (i = 0; i <= strands; i++) {
-        var topX = hoop.rimLeftX + ((hoop.rimRightX - hoop.rimLeftX) * i) / strands;
-        var bottomX = rimCx + (topX - rimCx) * 0.35;
-        ctx.beginPath();
-        ctx.moveTo(topX, hoop.rimY);
-        ctx.lineTo(bottomX, hoop.rimY + 13);
-        ctx.stroke();
-      }
-      ctx.beginPath();
-      ctx.moveTo(hoop.rimLeftX, hoop.rimY + 6);
-      ctx.lineTo(hoop.rimRightX, hoop.rimY + 6);
-      ctx.stroke();
-
+      ctx.drawImage(ASSETS.hoop, hoop.spriteX, hoop.spriteY, hoop.spriteW, hoop.spriteH);
       ctx.restore();
     }
 
@@ -465,7 +412,7 @@
       var tipX = ball.x - Math.cos(angle) * pull;
       var tipY = ball.y - Math.sin(angle) * pull;
 
-      ctx.strokeStyle = "rgba(158,232,168,0.8)";
+      ctx.strokeStyle = "rgba(255,255,255,0.85)";
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
@@ -476,7 +423,7 @@
 
       // Small arrowhead at the tip so the shot direction is unambiguous.
       var headAngle = Math.atan2(ball.y - tipY, ball.x - tipX);
-      ctx.fillStyle = "rgba(158,232,168,0.9)";
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
       ctx.beginPath();
       ctx.moveTo(tipX, tipY);
       ctx.lineTo(tipX - Math.cos(headAngle - 0.4) * 7, tipY - Math.sin(headAngle - 0.4) * 7);
@@ -486,19 +433,15 @@
     }
 
     function drawBall() {
+      if (imgReady(ASSETS.ball)) {
+        ctx.drawImage(ASSETS.ball, ball.x - BALL_RADIUS, ball.y - BALL_RADIUS, BALL_RADIUS * 2, BALL_RADIUS * 2);
+        return;
+      }
+      // Fallback while the sprite is still loading, so the ball is never invisible.
       ctx.fillStyle = "#ff8a2b";
       ctx.beginPath();
       ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI * 2);
       ctx.fill();
-      // A couple of seam lines so it reads as a basketball, not a dot.
-      ctx.strokeStyle = "rgba(26,26,26,0.6)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(ball.x - BALL_RADIUS, ball.y);
-      ctx.lineTo(ball.x + BALL_RADIUS, ball.y);
-      ctx.moveTo(ball.x, ball.y - BALL_RADIUS);
-      ctx.lineTo(ball.x, ball.y + BALL_RADIUS);
-      ctx.stroke();
     }
 
     function drawScorePopup() {
