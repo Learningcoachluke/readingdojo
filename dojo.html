@@ -52,6 +52,7 @@ const state = {
   qIndex: 0,
   answers: [],         // { questionId, answer }
   quizResults: null,   // { results, correctCount, total }
+  showPassageRef: false,
   errorMsg: '',
 };
 
@@ -380,12 +381,16 @@ function renderReadingResults() {
         <div class="stat-box"><div class="stat-num">${r.wpm}</div><div class="stat-label">Words per minute</div></div>
         <div class="stat-box"><div class="stat-num">${r.accuracyPct}%</div><div class="stat-label">Reading accuracy</div></div>
       </div>
-      <div class="hint">This is a practice estimate — speech transcription isn't perfect, especially with fast or quiet reading.</div>
-      <button class="btn-primary" id="continue-to-quiz-btn">Continue to Questions</button>
+      <div class="hint">This is a practice estimate — speech transcription isn't perfect, especially with fast or quiet reading. Not happy with it? Read it again before saving.</div>
+      <button class="btn-primary" id="save-continue-btn">Save Score &amp; Continue</button>
+      <button class="btn-secondary" id="read-again-btn">Read Again</button>
     </div>
   `;
-  document.getElementById('continue-to-quiz-btn').addEventListener('click', () => {
-    setState({ screen: 'quiz', qIndex: 0, answers: [] });
+  document.getElementById('save-continue-btn').addEventListener('click', () => {
+    setState({ screen: 'quiz', qIndex: 0, answers: [], showPassageRef: false });
+  });
+  document.getElementById('read-again-btn').addEventListener('click', () => {
+    setState({ screen: 'passage', recording: false, readingStats: null, errorMsg: '' });
   });
 }
 
@@ -409,9 +414,16 @@ function renderQuiz() {
     : `<textarea id="short-answer-input" placeholder="Type your answer...">${existingAnswer ? escapeHtml(existingAnswer.answer) : ''}</textarea>`;
 
   screenEl.innerHTML = `
+    ${state.showPassageRef ? `
+      <div class="card">
+        <div class="passage-title" style="font-size:18px;">${escapeHtml(s.title)}</div>
+        <div class="passage-text">${escapeHtml(s.passage)}</div>
+      </div>
+    ` : ''}
     <div class="card">
       <div class="quiz-top">
         <div class="quiz-progress">Question ${state.qIndex + 1} of ${total}</div>
+        <button type="button" class="btn-secondary" id="toggle-passage-btn" style="width:auto; margin:0; padding:6px 12px; font-size:12px;">${state.showPassageRef ? 'Hide Passage' : 'View Passage'}</button>
       </div>
       <div class="question-text">${escapeHtml(q.question)}</div>
       ${bodyHtml}
@@ -424,6 +436,10 @@ function renderQuiz() {
       </div>
     </div>
   `;
+
+  document.getElementById('toggle-passage-btn').addEventListener('click', () => {
+    setState({ showPassageRef: !state.showPassageRef });
+  });
 
   if (q.type === 'multiple_choice') {
     document.querySelectorAll('.option-btn').forEach((btn) => {
@@ -498,7 +514,7 @@ function renderResults() {
   `;
 
   document.getElementById('again-btn').addEventListener('click', () => {
-    setState({ screen: 'setup', topic: '', year: null, session: null, errorMsg: '' });
+    setState({ screen: 'setup', topic: '', year: null, session: null, showPassageRef: false, errorMsg: '' });
   });
 }
 

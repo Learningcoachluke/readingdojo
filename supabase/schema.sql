@@ -112,13 +112,84 @@ alter table public.ai_usage_log enable row level security;
 create index ai_usage_log_boy_endpoint_idx on public.ai_usage_log (boy_id, endpoint, created_at);
 
 -- ── aggregate stats view (RLS-respecting) ───────────────────────────────
+-- Overall (all-time) stats per boy, and the same breakdown split by year
+-- level. avg_correct_wpm is "correct words per minute" (wpm adjusted for
+-- accuracy) — a standard reading-fluency metric distinct from raw wpm.
 create view public.my_reading_stats
   with (security_invoker = true) as
+  with session_stats as (
+    select
+      boy_id,
+      count(*) filter (where status = 'completed')                                          as session_count,
+      coalesce(sum(word_count) filter (where status = 'completed'), 0)                       as total_words,
+      round(avg(accuracy_pct) filter (where status = 'completed'), 1)                        as avg_accuracy_pct,
+      round(avg(wpm) filter (where status = 'completed'), 1)                                 as avg_wpm,
+      round(avg(wpm * accuracy_pct / 100.0) filter (where status = 'completed'), 1)          as avg_correct_wpm,
+      coalesce(sum(reading_duration_seconds) filter (where status = 'completed'), 0)         as total_reading_seconds
+    from public.reading_sessions
+    group by boy_id
+  ),
+  question_stats as (
+    select
+      rs.boy_id,
+      count(*)                             as questions_answered,
+      count(*) filter (where cr.is_correct) as questions_correct
+    from public.comprehension_responses cr
+    join public.reading_sessions rs on rs.id = cr.session_id
+    group by rs.boy_id
+  )
   select
-    boy_id,
-    count(*) filter (where status = 'completed')                         as session_count,
-    coalesce(sum(word_count) filter (where status = 'completed'), 0)     as total_words,
-    round(avg(accuracy_pct) filter (where status = 'completed'), 1)      as avg_accuracy_pct,
-    round(avg(wpm) filter (where status = 'completed'), 1)               as avg_wpm
-  from public.reading_sessions
-  group by boy_id;
+    s.boy_id,
+    s.session_count,
+    s.total_words,
+    s.avg_accuracy_pct,
+    s.avg_wpm,
+    s.avg_correct_wpm,
+    s.total_reading_seconds,
+    coalesce(q.questions_answered, 0)                                        as questions_answered,
+    coalesce(q.questions_correct, 0)                                         as questions_correct,
+    coalesce(q.questions_answered, 0) - coalesce(q.questions_correct, 0)     as questions_incorrect
+  from session_stats s
+  left join question_stats q on q.boy_id = s.boy_id;
+
+create view public.my_reading_stats_by_year
+  with (security_invoker = true) as
+  with session_stats as (
+    select
+      boy_id,
+      year_level,
+      count(*) filter (where status = 'completed')                                          as session_count,
+      coalesce(sum(word_count) filter (where status = 'completed'), 0)                       as total_words,
+      round(avg(accuracy_pct) filter (where status = 'completed'), 1)                        as avg_accuracy_pct,
+      round(avg(wpm) filter (where status = 'completed'), 1)                                 as avg_wpm,
+      round(avg(wpm * accuracy_pct / 100.0) filter (where status = 'completed'), 1)          as avg_correct_wpm,
+      coalesce(sum(reading_duration_seconds) filter (where status = 'completed'), 0)         as total_reading_seconds
+    from public.reading_sessions
+    group by boy_id, year_level
+  ),
+  question_stats as (
+    select
+      rs.boy_id,
+      rs.year_level,
+      count(*)                              as questions_answered,
+      count(*) filter (where cr.is_correct) as questions_correct
+    from public.comprehension_responses cr
+    join public.reading_sessions rs on rs.id = cr.session_id
+    group by rs.boy_id, rs.year_level
+  )
+  select
+    s.boy_id,
+    s.year_level,
+    s.session_count,
+    s.total_words,
+    s.avg_accuracy_pct,
+    s.avg_wpm,
+    s.avg_correct_wpm,
+    s.total_reading_seconds,
+    coalesce(q.questions_answered, 0)                                        as questions_answered,
+    coalesce(q.questions_correct, 0)                                         as questions_correct,
+    coalesce(q.questions_answered, 0) - coalesce(q.questions_correct, 0)     as questions_incorrect
+  from session_stats s
+  left join question_stats q on q.boy_id = s.boy_id and q.year_level = s.year_level
+  where s.session_count > 0
+  order by s.year_level;

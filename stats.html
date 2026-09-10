@@ -20,12 +20,7 @@
 
   <div class="card">
     <h2 style="text-align:center; font-size:16px; color:var(--grey); text-transform:uppercase; letter-spacing:0.05em;">Overall</h2>
-    <div class="stat-grid">
-      <div class="stat-box"><div class="stat-num" id="overall-sessions">–</div><div class="stat-label">Passages read</div></div>
-      <div class="stat-box"><div class="stat-num" id="overall-words">–</div><div class="stat-label">Total words</div></div>
-      <div class="stat-box"><div class="stat-num" id="overall-accuracy">–</div><div class="stat-label">Avg accuracy</div></div>
-      <div class="stat-box"><div class="stat-num" id="overall-wpm">–</div><div class="stat-label">Avg words/min</div></div>
-    </div>
+    <div id="overall-body"><div class="loading-msg">Loading...</div></div>
   </div>
 
   <div class="card" id="latest-card">
@@ -34,6 +29,8 @@
       <div class="loading-msg">Loading...</div>
     </div>
   </div>
+
+  <div id="by-year-section"></div>
 </div>
 <script src="shared/supabase-client.js"></script>
 <script>
@@ -43,8 +40,9 @@
 
     document.getElementById('logout-btn').addEventListener('click', logout);
 
-    const [{ data: overall }, { data: latestRows }] = await Promise.all([
+    const [{ data: overall }, { data: byYear }, { data: latestRows }] = await Promise.all([
       sb.from('my_reading_stats').select('*').maybeSingle(),
+      sb.from('my_reading_stats_by_year').select('*'),
       sb.from('reading_sessions')
         .select('topic,year_level,passage_title,word_count,accuracy_pct,wpm,reading_duration_seconds,created_at')
         .eq('status', 'completed')
@@ -52,25 +50,68 @@
         .limit(1),
     ]);
 
-    document.getElementById('overall-sessions').textContent = overall ? overall.session_count : 0;
-    document.getElementById('overall-words').textContent = overall ? overall.total_words : 0;
-    document.getElementById('overall-accuracy').textContent = overall && overall.avg_accuracy_pct != null ? overall.avg_accuracy_pct + '%' : '—';
-    document.getElementById('overall-wpm').textContent = overall && overall.avg_wpm != null ? overall.avg_wpm : '—';
+    document.getElementById('overall-body').innerHTML = renderStatBoxes(overall, 'Texts read');
 
     const latest = latestRows && latestRows[0];
     const latestBody = document.getElementById('latest-body');
     if (!latest) {
       latestBody.innerHTML = '<div class="hint" style="text-align:center;">No completed sessions yet — go read a passage!</div>';
-      return;
+    } else {
+      latestBody.innerHTML =
+        '<div class="passage-title" style="font-size:18px;">' + escapeHtml(latest.passage_title || latest.topic) + '</div>' +
+        '<div class="hint" style="margin-bottom:14px;">Year ' + latest.year_level + ' &middot; ' + escapeHtml(latest.topic) + '</div>' +
+        '<div class="stat-grid">' +
+          '<div class="stat-box"><div class="stat-num">' + (latest.wpm != null ? latest.wpm : '—') + '</div><div class="stat-label">Words/min</div></div>' +
+          '<div class="stat-box"><div class="stat-num">' + (latest.accuracy_pct != null ? latest.accuracy_pct + '%' : '—') + '</div><div class="stat-label">Accuracy</div></div>' +
+        '</div>';
     }
-    latestBody.innerHTML =
-      '<div class="passage-title" style="font-size:18px;">' + escapeHtml(latest.passage_title || latest.topic) + '</div>' +
-      '<div class="hint" style="margin-bottom:14px;">Year ' + latest.year_level + ' &middot; ' + escapeHtml(latest.topic) + '</div>' +
-      '<div class="stat-grid">' +
-        '<div class="stat-box"><div class="stat-num">' + (latest.wpm != null ? latest.wpm : '—') + '</div><div class="stat-label">Words/min</div></div>' +
-        '<div class="stat-box"><div class="stat-num">' + (latest.accuracy_pct != null ? latest.accuracy_pct + '%' : '—') + '</div><div class="stat-label">Accuracy</div></div>' +
-      '</div>';
+
+    const byYearSection = document.getElementById('by-year-section');
+    if (!byYear || byYear.length === 0) {
+      byYearSection.innerHTML = '';
+    } else {
+      byYearSection.innerHTML =
+        '<h2 style="text-align:center; font-size:16px; color:var(--grey); text-transform:uppercase; letter-spacing:0.05em; margin:22px 0 12px;">By Year Level</h2>' +
+        byYear.map((row) => `
+          <div class="card">
+            <h3 style="text-align:center; font-family:var(--display); margin:0 0 4px;">Year ${row.year_level}</h3>
+            ${renderStatBoxes(row, 'Texts read')}
+          </div>
+        `).join('');
+    }
   })();
+
+  function renderStatBoxes(stats, sessionLabel) {
+    if (!stats) {
+      return '<div class="hint" style="text-align:center;">No completed sessions yet.</div>';
+    }
+    return (
+      '<div class="stat-grid">' +
+      statBox(stats.session_count, sessionLabel) +
+      statBox(stats.total_words, 'Words read') +
+      statBox(stats.avg_accuracy_pct != null ? stats.avg_accuracy_pct + '%' : '—', 'Avg accuracy') +
+      statBox(stats.avg_wpm != null ? stats.avg_wpm : '—', 'Avg words/min') +
+      statBox(stats.avg_correct_wpm != null ? stats.avg_correct_wpm : '—', 'Avg correct words/min') +
+      statBox(formatDuration(stats.total_reading_seconds), 'Time reading') +
+      statBox(stats.questions_correct, 'Questions correct') +
+      statBox(stats.questions_incorrect, 'Questions missed') +
+      '</div>'
+    );
+  }
+
+  function statBox(value, label) {
+    return '<div class="stat-box"><div class="stat-num">' + value + '</div><div class="stat-label">' + escapeHtml(label) + '</div></div>';
+  }
+
+  function formatDuration(totalSeconds) {
+    const s = Math.round(Number(totalSeconds) || 0);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return h + 'h ' + m + 'm ' + sec + 's';
+    if (m > 0) return m + 'm ' + sec + 's';
+    return sec + 's';
+  }
 </script>
 </body>
 </html>

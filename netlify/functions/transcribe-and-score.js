@@ -57,8 +57,13 @@ exports.handler = async function (event) {
     if (!session) {
       return { statusCode: 404, body: JSON.stringify({ error: "Session not found." }) };
     }
-    if (session.status !== "generated") {
-      return { statusCode: 409, body: JSON.stringify({ error: "This reading has already been submitted." }) };
+    // Allow re-scoring the same session as many times as needed (the
+    // "Read Again" flow) right up until the quiz is graded — each call
+    // overwrites the previous attempt's transcript/accuracy/wpm, and only
+    // the attempt still standing when the boy reaches "completed" ever
+    // counts toward his stats (my_reading_stats filters on status).
+    if (session.status === "completed") {
+      return { statusCode: 409, body: JSON.stringify({ error: "This reading's quiz has already been graded." }) };
     }
 
     const logUsage = await checkAndLog(boyId, "transcribe-and-score");
