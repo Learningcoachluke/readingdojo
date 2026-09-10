@@ -3,9 +3,10 @@
 // reading scoring, comprehension grading) so the wait feels shorter. Pure
 // <canvas> + vanilla JS, no images/libraries — it injects its own <style>
 // tag on first use, so it's a genuine drop-in component: any page can
-// mount it without already having matching CSS loaded. The score chime is
-// synthesized with the Web Audio API (a couple of oscillator tones) rather
-// than an embedded audio file, keeping this a single, asset-free file.
+// mount it without already having matching CSS loaded. The court, hoop
+// and ball are all drawn with canvas primitives (no image assets), and
+// the score chime is synthesized with the Web Audio API, keeping this a
+// single, asset-free file.
 //
 // Usage:
 //   const game = LoadingGame.mount(containerEl);
@@ -42,15 +43,25 @@
   var MIN_DRAG = 10; // px — shorter drags are treated as a cancelled shot
   var MAX_DRAG = 90; // px — pulling further than this doesn't add more power
   var BALL_RADIUS = 8;
-  var GROUND_MARGIN = 14; // gap between the canvas bottom edge and the ground line
   var HOOP_RIGHT_MARGIN = 14; // backboard's distance from the canvas's right edge
   var BACKBOARD_WIDTH = 4;
-  var BACKBOARD_TOP = 14;
-  var BACKBOARD_HEIGHT = 34;
+  var BACKBOARD_TOP = 10;
+  var BACKBOARD_HEIGHT = 32;
   var RIM_WIDTH = 34; // how far the rim sticks out to the left of the backboard
   var RIM_DROP = 6; // rim's distance below the top of the backboard
   var POST_RADIUS = 2.5; // collision radius of each rim tip
   var BOUNCE_RESTITUTION = 0.45; // velocity retained (and reflected) on a rim/backboard hit
+
+  // ---- Court geometry: a simple trapezoid standing in for a full court
+  // viewed end-on-ish, wide at the near (bottom) baseline and narrower at
+  // the far (top) baseline. The hoop stands just beyond the court's right
+  // edge, matching a real court where the basket overhangs the baseline. ----
+  var COURT_TOP_Y = 22;
+  var COURT_BOTTOM_MARGIN = 8;
+  var COURT_TOP_LEFT_FRAC = 0.3;
+  var COURT_TOP_RIGHT_FRAC = 0.66;
+  var COURT_BOTTOM_LEFT_FRAC = 0.02;
+  var COURT_BOTTOM_RIGHT_FRAC = 0.97;
 
   function mount(container) {
     ensureStyles();
@@ -67,7 +78,16 @@
     container.appendChild(wrap);
 
     var ctx = canvas.getContext("2d");
-    var groundY = 120;
+
+    // Court corners, recomputed on resize from the canvas's current CSS
+    // size. courtXBoundsAtY() interpolates the left/right playing-floor
+    // edge for any y between the far and near baselines.
+    var courtTopY = COURT_TOP_Y;
+    var courtBottomY = 120;
+    var courtTopLeftX = 0;
+    var courtTopRightX = 0;
+    var courtBottomLeftX = 0;
+    var courtBottomRightX = 0;
 
     // Canvas internal resolution follows its CSS box size (and device
     // pixel ratio) so drawing stays crisp without manually scaling shapes.
@@ -77,7 +97,23 @@
       canvas.width = Math.round(rect.width * dpr);
       canvas.height = Math.round(rect.height * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      groundY = rect.height - GROUND_MARGIN;
+      courtBottomY = rect.height - COURT_BOTTOM_MARGIN;
+      courtTopY = COURT_TOP_Y;
+      courtTopLeftX = rect.width * COURT_TOP_LEFT_FRAC;
+      courtTopRightX = rect.width * COURT_TOP_RIGHT_FRAC;
+      courtBottomLeftX = rect.width * COURT_BOTTOM_LEFT_FRAC;
+      courtBottomRightX = rect.width * COURT_BOTTOM_RIGHT_FRAC;
+    }
+
+    function courtXBoundsAtY(y) {
+      var span = courtBottomY - courtTopY;
+      var t = span > 0 ? (y - courtTopY) / span : 0;
+      if (t < 0) t = 0;
+      if (t > 1) t = 1;
+      return {
+        left: courtTopLeftX + (courtBottomLeftX - courtTopLeftX) * t,
+        right: courtTopRightX + (courtBottomRightX - courtTopRightX) * t,
+      };
     }
 
     // Hoop geometry, derived from the canvas's current width so it holds
@@ -109,12 +145,28 @@
     var rafId = null;
     var lastTs = null;
     var audioCtx = null;
+    // The ball can rest anywhere on the court, not just a fixed ground
+    // line — so each shot remembers the floor height it launched from,
+    // and "landing" means falling back to that same height.
+    var flightFloorY = 0;
 
+    // Picks a random resting spot anywhere on the court floor (avoiding
+    // the hoop itself so the ball never respawns stuck under the rim).
     function respawnBall() {
-      var w = canvas.getBoundingClientRect().width;
-      var spawnRight = Math.max(BALL_RADIUS + 10, w * 0.55);
-      ball.x = BALL_RADIUS + 10 + Math.random() * (spawnRight - BALL_RADIUS - 10);
-      ball.y = groundY - BALL_RADIUS;
+      var hoop = hoopGeometry();
+      var x = 0;
+      var y = 0;
+      var tries;
+      for (tries = 0; tries < 12; tries++) {
+        y = courtTopY + Math.random() * (courtBottomY - courtTopY);
+        var bounds = courtXBoundsAtY(y);
+        var usable = Math.max(1, bounds.right - bounds.left - BALL_RADIUS * 2);
+        x = bounds.left + BALL_RADIUS + Math.random() * usable;
+        var nearHoop = x > hoop.rimLeftX - 24 && y < hoop.backboardBottom + 20;
+        if (!nearHoop) break;
+      }
+      ball.x = x;
+      ball.y = y;
       ball.vx = 0;
       ball.vy = 0;
       phase = "idle";
@@ -229,10 +281,11 @@
         playScoreChime();
       }
 
-      // Ground: whatever happened above, once the ball lands the attempt
-      // is over — wait for this, then respawn at a new random spot.
-      if (ball.y + BALL_RADIUS >= groundY) {
-        ball.y = groundY - BALL_RADIUS;
+      // Floor: whatever happened above, once the ball falls back to the
+      // height it launched from, the attempt is over — respawn it
+      // somewhere fresh on the court.
+      if (ball.y + BALL_RADIUS >= flightFloorY) {
+        ball.y = flightFloorY - BALL_RADIUS;
         respawnBall();
       }
     }
@@ -261,15 +314,10 @@
       var w = rect.width;
       var h = rect.height;
       ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, w, h);
 
-      // Ground
-      ctx.strokeStyle = "#3a4050";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(0, groundY + 1);
-      ctx.lineTo(w, groundY + 1);
-      ctx.stroke();
-
+      drawCourt();
       drawHoop();
       drawAimLine();
       drawBall();
@@ -283,40 +331,125 @@
       drawScorePopup();
     }
 
+    function courtPath() {
+      ctx.beginPath();
+      ctx.moveTo(courtTopLeftX, courtTopY);
+      ctx.lineTo(courtTopRightX, courtTopY);
+      ctx.lineTo(courtBottomRightX, courtBottomY);
+      ctx.lineTo(courtBottomLeftX, courtBottomY);
+      ctx.closePath();
+    }
+
+    // A simplified wood court: a shaded trapezoid floor with a few plank
+    // streaks, a border, a center circle, a halfway line and two small
+    // key rectangles near the baselines — enough to read as a court at
+    // this size without drawing every real marking.
+    function drawCourt() {
+      ctx.save();
+      courtPath();
+      var grad = ctx.createLinearGradient(0, courtTopY, 0, courtBottomY);
+      grad.addColorStop(0, "#a97c49");
+      grad.addColorStop(1, "#caa06c");
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.clip();
+
+      ctx.strokeStyle = "rgba(0,0,0,0.08)";
+      ctx.lineWidth = 1;
+      var planks = 7;
+      var i;
+      for (i = 1; i < planks; i++) {
+        var t = i / planks;
+        var topX = courtTopLeftX + (courtTopRightX - courtTopLeftX) * t;
+        var botX = courtBottomLeftX + (courtBottomRightX - courtBottomLeftX) * t;
+        ctx.beginPath();
+        ctx.moveTo(topX, courtTopY);
+        ctx.lineTo(botX, courtBottomY);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = "rgba(255,255,255,0.85)";
+      ctx.lineWidth = 1.5;
+
+      var midTopX = (courtTopLeftX + courtTopRightX) / 2;
+      var midBotX = (courtBottomLeftX + courtBottomRightX) / 2;
+      ctx.beginPath();
+      ctx.moveTo(midTopX, courtTopY);
+      ctx.lineTo(midBotX, courtBottomY);
+      ctx.stroke();
+
+      var midY = (courtTopY + courtBottomY) / 2;
+      var midBounds = courtXBoundsAtY(midY);
+      var midWidth = midBounds.right - midBounds.left;
+      var cx = (midBounds.left + midBounds.right) / 2;
+      var crx = midWidth * 0.12;
+      ctx.beginPath();
+      ctx.ellipse(cx, midY, crx, crx * 0.55, 0, 0, Math.PI * 2);
+      ctx.stroke();
+
+      var laneWidth = midWidth * 0.11;
+      var laneDepth = (courtBottomY - courtTopY) * 0.4;
+      ctx.strokeRect(midBounds.left, midY - laneDepth / 2, laneWidth, laneDepth);
+      ctx.strokeRect(midBounds.right - laneWidth, midY - laneDepth / 2, laneWidth, laneDepth);
+
+      ctx.restore();
+
+      ctx.strokeStyle = "rgba(255,255,255,0.85)";
+      ctx.lineWidth = 1.5;
+      courtPath();
+      ctx.stroke();
+    }
+
     function drawHoop() {
       var hoop = hoopGeometry();
+      var rect = canvas.getBoundingClientRect();
       var shakeX = hoopShakeMag > 0 ? (Math.random() - 0.5) * 5 * hoopShakeMag : 0;
       var shakeY = hoopShakeMag > 0 ? (Math.random() - 0.5) * 3 * hoopShakeMag : 0;
 
       ctx.save();
       ctx.translate(shakeX, shakeY);
 
-      // Backboard
-      ctx.fillStyle = "#f2f2f2";
-      ctx.fillRect(hoop.backboardX, hoop.backboardTop, BACKBOARD_WIDTH, BACKBOARD_HEIGHT);
-
-      // Rim
-      ctx.strokeStyle = "#ff8a2b";
+      // Support pole running down to the court's near-right corner.
+      ctx.strokeStyle = "#8d8d8d";
       ctx.lineWidth = 3;
-      ctx.lineCap = "round";
       ctx.beginPath();
-      ctx.moveTo(hoop.rimLeftX, hoop.rimY);
-      ctx.lineTo(hoop.rimRightX, hoop.rimY);
+      ctx.moveTo(hoop.backboardX + BACKBOARD_WIDTH + 1, hoop.backboardTop + 6);
+      ctx.lineTo(rect.width - 5, rect.height - 6);
+      ctx.stroke();
+
+      // Backboard
+      ctx.fillStyle = "#f5f5f0";
+      ctx.strokeStyle = "#8d8d8d";
+      ctx.lineWidth = 1;
+      ctx.fillRect(hoop.backboardX, hoop.backboardTop, BACKBOARD_WIDTH, BACKBOARD_HEIGHT);
+      ctx.strokeRect(hoop.backboardX, hoop.backboardTop, BACKBOARD_WIDTH, BACKBOARD_HEIGHT);
+
+      // Rim — a thin ellipse to suggest the ring viewed at an angle
+      var rimCx = (hoop.rimLeftX + hoop.rimRightX) / 2;
+      var rimRx = (hoop.rimRightX - hoop.rimLeftX) / 2;
+      ctx.strokeStyle = "#ff5a1f";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.ellipse(rimCx, hoop.rimY, rimRx, 3, 0, 0, Math.PI * 2);
       ctx.stroke();
 
       // Net — a few simple lines hanging from the rim, tapering inward
-      ctx.strokeStyle = "rgba(242,242,242,0.55)";
+      ctx.strokeStyle = "rgba(245,245,245,0.6)";
       ctx.lineWidth = 1;
-      var netSpan = hoop.rimRightX - hoop.rimLeftX;
-      var strands = 4;
-      for (var i = 0; i <= strands; i++) {
-        var topX = hoop.rimLeftX + (netSpan * i) / strands;
-        var bottomX = hoop.rimLeftX + netSpan * 0.5 + (topX - (hoop.rimLeftX + netSpan * 0.5)) * 0.4;
+      var strands = 5;
+      var i;
+      for (i = 0; i <= strands; i++) {
+        var topX = hoop.rimLeftX + ((hoop.rimRightX - hoop.rimLeftX) * i) / strands;
+        var bottomX = rimCx + (topX - rimCx) * 0.35;
         ctx.beginPath();
         ctx.moveTo(topX, hoop.rimY);
-        ctx.lineTo(bottomX, hoop.rimY + 12);
+        ctx.lineTo(bottomX, hoop.rimY + 13);
         ctx.stroke();
       }
+      ctx.beginPath();
+      ctx.moveTo(hoop.rimLeftX, hoop.rimY + 6);
+      ctx.lineTo(hoop.rimRightX, hoop.rimY + 6);
+      ctx.stroke();
 
       ctx.restore();
     }
@@ -420,6 +553,7 @@
       ball.vx = -Math.cos(angle) * clamped * POWER_SCALE;
       ball.vy = -Math.sin(angle) * clamped * POWER_SCALE;
       scoredThisFlight = false;
+      flightFloorY = ball.y; // this shot "lands" once it falls back to its own launch height
       phase = "flying";
     }
 
