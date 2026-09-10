@@ -41,6 +41,7 @@ const state = {
   screen: 'setup',
   topic: '',
   year: null,
+  genre: null, // 'fiction' | 'nonfiction'
   session: null,     // { sessionId, title, passage, questions }
   recording: false,
   mediaRecorder: null,
@@ -81,6 +82,10 @@ function renderSetup() {
       <label class="field-label" for="topic-input">What do you want to read about?</label>
       <input type="text" id="topic-input" placeholder="e.g. most money ever made in Fortnite" maxlength="200" value="${escapeHtml(state.topic)}" />
       <div class="hint">Pick any topic you like — the dojo will turn it into a reading passage.</div>
+      <div class="genre-toggle" id="genre-toggle">
+        <button type="button" class="genre-btn ${state.genre === 'fiction' ? 'selected' : ''}" data-genre="fiction">Fiction</button>
+        <button type="button" class="genre-btn ${state.genre === 'nonfiction' ? 'selected' : ''}" data-genre="nonfiction">Non-Fiction</button>
+      </div>
     </div>
     <div class="card">
       <label class="field-label">Choose your year level</label>
@@ -98,6 +103,13 @@ function renderSetup() {
   `;
 
   document.getElementById('topic-input').addEventListener('input', (e) => { state.topic = e.target.value; });
+  document.querySelectorAll('.genre-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.genre = btn.dataset.genre;
+      document.querySelectorAll('.genre-btn').forEach((b) => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    });
+  });
   document.querySelectorAll('.year-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       state.year = parseInt(btn.dataset.year, 10);
@@ -111,6 +123,7 @@ function renderSetup() {
 async function generatePassage() {
   const topic = state.topic.trim();
   if (!topic) { setState({ errorMsg: 'Type a topic first.' }); return; }
+  if (!state.genre) { setState({ errorMsg: 'Choose Fiction or Non-Fiction.' }); return; }
   if (!state.year) { setState({ errorMsg: 'Choose a year level.' }); return; }
 
   setState({ screen: 'loading-passage', errorMsg: '' });
@@ -118,7 +131,7 @@ async function generatePassage() {
   try {
     const data = await authedFetch('/.netlify/functions/create-passage', {
       method: 'POST',
-      body: JSON.stringify({ topic: topic, yearLevel: state.year }),
+      body: JSON.stringify({ topic: topic, yearLevel: state.year, genre: state.genre }),
     });
     setState({
       screen: 'passage',
@@ -172,25 +185,59 @@ function renderPassage() {
   }
 }
 
-// Splits passage text into whitespace tokens (kept as-is, preserving
-// paragraph breaks) and word tokens (wrapped in a clickable span). Each
-// span's data-word is the punctuation-stripped word actually sent for
-// single-word speech synthesis (and used as the audio cache key); the
-// displayed text keeps its original punctuation. data-index numbers word
-// spans sequentially so a drag gesture can find the range between two of
-// them regardless of direction.
+// Splits the passage into paragraph blocks (blank-line separated). A block
+// starting with "## " (the convention the non-fiction prompt is told to
+// use) renders as a styled subheading, not clickable-word text; every other
+// block is wrapped word-by-word for tap/drag-to-hear. Each word span's
+// data-word is the punctuation-stripped word sent for speech synthesis
+// (and used as the audio cache key); displayed text keeps its punctuation.
+// data-index numbers word spans sequentially across the WHOLE passage
+// (headings don't consume an index) so a drag gesture spanning paragraphs
+// still finds the right range.
 function renderClickableWords(text) {
   let index = 0;
+
+  function renderWords(segment) {
+    return segment
+      .split(/(\s+)/)
+      .map((tok) => {
+        if (!tok) return '';
+        if (/^\s+$/.test(tok)) return escapeHtml(tok);
+        const clean = tok.replace(/^[^a-zA-Z0-9']+|[^a-zA-Z0-9']+$/g, '');
+        if (!clean) return escapeHtml(tok);
+        const span = `<span class="word" data-word="${escapeHtml(clean)}" data-index="${index}">${escapeHtml(tok)}</span>`;
+        index++;
+        return span;
+      })
+      .join('');
+  }
+
   return text
-    .split(/(\s+)/)
-    .map((tok) => {
-      if (!tok) return '';
-      if (/^\s+$/.test(tok)) return escapeHtml(tok);
-      const clean = tok.replace(/^[^a-zA-Z0-9']+|[^a-zA-Z0-9']+$/g, '');
-      if (!clean) return escapeHtml(tok);
-      const span = `<span class="word" data-word="${escapeHtml(clean)}" data-index="${index}">${escapeHtml(tok)}</span>`;
-      index++;
-      return span;
+    .split(/\n\s*\n/)
+    .map((block) => {
+      const trimmed = block.trim();
+      if (!trimmed) return '';
+      if (trimmed.startsWith('## ')) {
+        return `<div class="passage-subheading">${escapeHtml(trimmed.slice(3).trim())}</div>`;
+      }
+      return `<p class="passage-para">${renderWords(block)}</p>`;
+    })
+    .join('');
+}
+
+// Non-interactive version for the quiz's "View Passage" reference — same
+// paragraph/heading structure, no word-tap audio (it's just for reading
+// back over, not a second read-aloud aid).
+function renderPassagePlain(text) {
+  return text
+    .split(/\n\s*\n/)
+    .map((block) => {
+      const trimmed = block.trim();
+      if (!trimmed) return '';
+      if (trimmed.startsWith('## ')) {
+        return `<div class="passage-subheading">${escapeHtml(trimmed.slice(3).trim())}</div>`;
+      }
+      return `<p class="passage-para">${escapeHtml(block)}</p>`;
     })
     .join('');
 }
@@ -417,7 +464,7 @@ function renderQuiz() {
     ${state.showPassageRef ? `
       <div class="card">
         <div class="passage-title" style="font-size:18px;">${escapeHtml(s.title)}</div>
-        <div class="passage-text">${escapeHtml(s.passage)}</div>
+        <div class="passage-text">${renderPassagePlain(s.passage)}</div>
       </div>
     ` : ''}
     <div class="card">
@@ -514,7 +561,7 @@ function renderResults() {
   `;
 
   document.getElementById('again-btn').addEventListener('click', () => {
-    setState({ screen: 'setup', topic: '', year: null, session: null, showPassageRef: false, errorMsg: '' });
+    setState({ screen: 'setup', topic: '', year: null, genre: null, session: null, showPassageRef: false, errorMsg: '' });
   });
 }
 

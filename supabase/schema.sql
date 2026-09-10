@@ -22,6 +22,7 @@ create table public.reading_sessions (
   boy_id                    uuid not null references public.profiles(id) on delete cascade,
   topic                     text not null,
   year_level                int not null check (year_level between 2 and 10),
+  genre                     text check (genre in ('fiction','nonfiction')),
   passage_title             text,
   passage_text              text,
   word_count                int,

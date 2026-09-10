@@ -149,6 +149,29 @@ button:disabled{ opacity:0.45; cursor:not-allowed; }
 .year-btn.selected{ background:var(--mint); color:#0a0a0a; border-color:var(--mint); }
 .year-btn.selected .yb-age{ color:#1e3a22; }
 
+/* ---------- Genre toggle ---------- */
+.genre-toggle{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+  margin-top:14px;
+}
+.genre-btn{
+  background:var(--panel-2);
+  border:1px solid rgba(255,255,255,0.14);
+  border-radius:8px;
+  padding:13px 8px;
+  color:var(--white);
+  font-family:var(--body);
+  text-transform:none;
+  letter-spacing:0;
+  margin-top:0;
+  font-weight:800;
+  font-size:14px;
+}
+.genre-btn:hover{ border-color:var(--mint); }
+.genre-btn.selected{ background:var(--mint); color:#0a0a0a; border-color:var(--mint); }
+
 /* ---------- Stats ---------- */
 .stat-grid{
   display:grid;
@@ -238,7 +261,17 @@ button:disabled{ opacity:0.45; cursor:not-allowed; }
 
 /* ---------- Passage ---------- */
 .passage-title{ font-family:var(--display); font-size:24px; margin-bottom:14px; }
-.passage-text{ font-size:17px; line-height:1.9; white-space:pre-wrap; color:#f0f0f0; user-select:none; -webkit-user-select:none; }
+.passage-text{ font-size:17px; line-height:1.9; color:#f0f0f0; user-select:none; -webkit-user-select:none; }
+.passage-para{ margin:0 0 1em; }
+.passage-para:last-child{ margin-bottom:0; }
+.passage-subheading{
+  font-family:var(--display);
+  font-size:19px;
+  color:var(--mint);
+  letter-spacing:0.02em;
+  margin:20px 0 8px;
+}
+.passage-subheading:first-child{ margin-top:0; }
 .word{
   cursor:pointer;
   border-radius:4px;

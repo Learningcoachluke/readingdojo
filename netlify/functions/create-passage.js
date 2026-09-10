@@ -36,11 +36,15 @@ exports.handler = async function (event) {
 
     const topic = (body.topic || "").trim();
     const yearLevel = parseInt(body.yearLevel, 10);
+    const genre = body.genre === "fiction" ? "fiction" : body.genre === "nonfiction" ? "nonfiction" : null;
     if (!topic || topic.length > 200) {
       return { statusCode: 400, body: JSON.stringify({ error: "Topic must be 1-200 characters." }) };
     }
     if (!Number.isInteger(yearLevel) || yearLevel < 2 || yearLevel > 10) {
       return { statusCode: 400, body: JSON.stringify({ error: "Year level must be between 2 and 10." }) };
+    }
+    if (!genre) {
+      return { statusCode: 400, body: JSON.stringify({ error: "Genre must be 'fiction' or 'nonfiction'." }) };
     }
 
     const logUsage = await checkAndLog(boyId, "create-passage");
@@ -56,7 +60,7 @@ exports.handler = async function (event) {
     const { shortAnswerCount, multipleChoiceCount } = questionMixForYear(yearLevel);
     const wordTarget = wordTargetForYear(yearLevel);
 
-    const generated = await generatePassage({ apiKey, topic, yearLevel, wordTarget, multipleChoiceCount, shortAnswerCount });
+    const generated = await generatePassage({ apiKey, topic, yearLevel, genre, wordTarget, multipleChoiceCount, shortAnswerCount });
 
     // Single check, no retry: Netlify's ~10s synchronous function timeout
     // doesn't leave room for a second sequential Claude call. The topic was
@@ -78,6 +82,7 @@ exports.handler = async function (event) {
       boy_id: boyId,
       topic,
       year_level: yearLevel,
+      genre,
       passage_title: generated.title,
       passage_text: generated.passage,
       word_count: wordCount,
@@ -122,9 +127,19 @@ exports.handler = async function (event) {
   }
 };
 
-async function generatePassage({ apiKey, topic, yearLevel, wordTarget, multipleChoiceCount, shortAnswerCount, strict }) {
+async function generatePassage({ apiKey, topic, yearLevel, genre, wordTarget, multipleChoiceCount, shortAnswerCount, strict }) {
   const total = multipleChoiceCount + shortAnswerCount;
   const outputBudget = Math.min(4096, 900 + total * 150);
+
+  const genreInstructions =
+    genre === "fiction"
+      ? `- Write a short FICTION story that uses the topic as its subject, setting, or central plot device. It must read like an actual story, not a factual explanation: invent named characters, give them a clear problem or conflict to face, include some dialogue in quotation marks, and use descriptive/sensory language. For Year 5+, work in at least one language feature such as personification, simile, or metaphor. It needs a real beginning, middle, and end — not just a slice of action.`
+      : `- Write a short NON-FICTION informational text — factually accurate and precise, not a story. Do not invent characters, dialogue, or fictional events. Structure it with 2-4 short subheadings marking distinct sections: each subheading goes on its own line starting with "## " (e.g. "## How Motocross Bikes Are Built"), followed by a blank line, then that section's paragraph(s). Make it genuinely interesting by including specific real numbers, statistics, percentages, dates, or measurements where they're relevant to the topic (e.g. speeds, sizes, record counts, years) — concrete facts, not vague generalities. Stick to well-established, verifiable information; if you're not confident about a specific fact, keep that part general rather than inventing a number or detail.`;
+
+  const questionStyle =
+    genre === "fiction"
+      ? `Base questions on plot, character, setting, and (for year 5+) inference about characters' feelings or motives.`
+      : `Base questions on a mix of literal recall, vocabulary-in-context, and (for year 5+) inference; for year 7+ also include some analysis/author's-purpose style questions.`;
 
   const systemPrompt = `You write short reading passages and comprehension quizzes for a kids' reading practice app called Reading Dojo, used by boys aged roughly 7-15 (Year 2-10).
 
@@ -132,18 +147,19 @@ Rules:
 - Write in an engaging, fun voice for a boy this age — this audience enjoys gaming, sports, competition, gross/wild facts, and pop culture. Don't be preachy or overly sanitized.
 - Keep it free of explicit sexual content, sexual content involving minors, graphic gore or extreme violence, hate speech, self-harm promotion, illegal drug instructions, and swearing. Mild peril, competitive/game violence, and gross-out humor are all fine.
 ${strict ? "- The previous attempt was flagged as inappropriate. Be noticeably more conservative this time while still being fun and on-topic.\n" : ""}- If the requested topic is unsafe or not age-appropriate, quietly redirect to the closest safe, appropriate angle on that topic without mentioning that you changed it.
+${genreInstructions}
 - Match reading difficulty (vocabulary, sentence length, sentence complexity, idea density) to the given year level. Year 9-10 passages can use longer sentences and more sophisticated vocabulary and ideas than Year 2-4.
 - Output ONLY valid JSON as a single line, no markdown fences, no commentary, matching exactly this shape:
 {"title":"string","passage":"string; use the two-character escape sequence \\n\\n between paragraphs — do NOT put a literal line break inside the JSON string, it must stay valid single-line JSON","questions":[{"type":"multiple_choice","question":"string","options":["string","string","string","string"],"correctIndex":0,"explanation":"one short sentence, under 15 words"}]}
   (short-answer questions instead use: {"type":"short_answer","question":"string","modelAnswer":"string — a full reference answer for grading","explanation":"one short sentence, under 15 words"})
 - Write exactly ${multipleChoiceCount} questions with "type":"multiple_choice" and exactly ${shortAnswerCount} questions with "type":"short_answer", in any order.
-- Base questions on a mix of literal recall, vocabulary-in-context, and (for year 5+) inference; for year 7+ also include some analysis/author's-purpose style questions. Keep wording age-appropriate.
+- ${questionStyle} Keep wording age-appropriate.
 - Multiple-choice: exactly one correct option, options short and plausible (no joke/throwaway options).
 - Short-answer: the modelAnswer should be a full sentence or two capturing what a correct answer needs to include, since it'll be used to grade the boy's own written answer.
 - Keep each question, option, and explanation concise so the full response stays compact.
 - Do not include any text outside the JSON object.`;
 
-  const userPrompt = `Topic: ${topic}\nYear level: Year ${yearLevel}\nTarget passage length: ${wordTarget} words.\nGenerate the passage and questions now as JSON only.`;
+  const userPrompt = `Topic: ${topic}\nGenre: ${genre === "fiction" ? "Fiction (story)" : "Non-fiction (factual, with subheadings)"}\nYear level: Year ${yearLevel}\nTarget passage length: ${wordTarget} words.\nGenerate the passage and questions now as JSON only.`;
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
