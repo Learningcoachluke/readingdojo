@@ -253,12 +253,12 @@
       ctx.closePath();
     }
 
-    // A small martial-arts figure in a fighting stance — drawn from
-    // primitives (no image assets needed): a filled gi (torso) with a
-    // black belt, a headband, and thick rounded-cap limb strokes instead
-    // of thin wireframe lines so it reads as a solid character even at
-    // this small size. Legs alternate between two run poses and tuck up
-    // into a third pose mid-air.
+    // A small running figure — drawn from primitives (no image assets
+    // needed): a filled gi (torso), a black headband, and thick
+    // rounded-cap limb strokes instead of thin wireframe lines so it
+    // reads as a solid character even at this small size. Arms stay
+    // swept back behind him as he sprints; legs alternate between two
+    // run poses and tuck up into a third pose mid-air.
     function drawPlayer() {
       var feetY = groundY + playerY;
       var legPose = onGround ? Math.floor(runFrame / 90) % 2 : 2; // 0/1 = run cycle, 2 = jump tuck
@@ -298,32 +298,16 @@
       roundRectPath(cx - 7, -PLAYER_H + 11, 14, 17, 4);
       ctx.fill();
 
-      // Belt — black with a thin mint trim so it stays visible against
-      // the black canvas background, plus two hanging ends. A small nod
-      // to "Black Belt" itself.
-      ctx.fillStyle = "#1a1a1a";
-      ctx.strokeStyle = "#9ee8a8";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.rect(cx - 7, hipY - 5, 14, 5);
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillRect(cx - 3, hipY, 3, 8);
-      ctx.fillRect(cx + 1, hipY, 3, 9);
-
-      // Arms — front arm punched forward with a small fist, rear arm back
+      // Arms — both swept back behind him as he sprints (he's facing
+      // right, into the oncoming obstacles, so "behind" is toward -x).
       ctx.strokeStyle = GI;
       ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.moveTo(cx, -PLAYER_H + 16);
-      ctx.lineTo(cx + 10, -PLAYER_H + 19);
+      ctx.lineTo(cx - 10, -PLAYER_H + 11);
       ctx.moveTo(cx, -PLAYER_H + 16);
-      ctx.lineTo(cx - 7, -PLAYER_H + 23);
+      ctx.lineTo(cx - 9, -PLAYER_H + 23);
       ctx.stroke();
-      ctx.fillStyle = GI;
-      ctx.beginPath();
-      ctx.arc(cx + 11, -PLAYER_H + 19, 2.5, 0, Math.PI * 2);
-      ctx.fill();
 
       // Head
       ctx.fillStyle = GI;
@@ -331,15 +315,22 @@
       ctx.arc(cx, -PLAYER_H + 5, 7, 0, Math.PI * 2);
       ctx.fill();
 
-      // Headband, tied off with a short trailing tail
-      ctx.fillStyle = "#9ee8a8";
-      ctx.fillRect(cx - 7, -PLAYER_H + 3, 14, 3);
+      // Headband — black, with a thin light outline so it stays visible
+      // against the black canvas — tied off with a short trailing tail.
+      ctx.fillStyle = "#1a1a1a";
+      ctx.strokeStyle = GI;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.rect(cx - 7, -PLAYER_H + 3, 14, 3);
+      ctx.fill();
+      ctx.stroke();
       ctx.beginPath();
       ctx.moveTo(cx + 7, -PLAYER_H + 4);
       ctx.lineTo(cx + 13, -PLAYER_H + 2);
       ctx.lineTo(cx + 13, -PLAYER_H + 6);
       ctx.closePath();
       ctx.fill();
+      ctx.stroke();
 
       ctx.restore();
     }
