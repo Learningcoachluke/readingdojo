@@ -80,38 +80,6 @@
         `).join('');
     }
   })();
-
-  function renderStatBoxes(stats, sessionLabel) {
-    if (!stats) {
-      return '<div class="hint" style="text-align:center;">No completed sessions yet.</div>';
-    }
-    return (
-      '<div class="stat-grid">' +
-      statBox(stats.session_count, sessionLabel) +
-      statBox(stats.total_words, 'Words read') +
-      statBox(stats.avg_accuracy_pct != null ? stats.avg_accuracy_pct + '%' : '—', 'Avg accuracy') +
-      statBox(stats.avg_wpm != null ? stats.avg_wpm : '—', 'Avg words/min') +
-      statBox(stats.avg_correct_wpm != null ? stats.avg_correct_wpm : '—', 'Avg correct words/min') +
-      statBox(formatDuration(stats.total_reading_seconds), 'Time reading') +
-      statBox(stats.questions_correct, 'Questions correct') +
-      statBox(stats.questions_incorrect, 'Questions missed') +
-      '</div>'
-    );
-  }
-
-  function statBox(value, label) {
-    return '<div class="stat-box"><div class="stat-num">' + value + '</div><div class="stat-label">' + escapeHtml(label) + '</div></div>';
-  }
-
-  function formatDuration(totalSeconds) {
-    const s = Math.round(Number(totalSeconds) || 0);
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    if (h > 0) return h + 'h ' + m + 'm ' + sec + 's';
-    if (m > 0) return m + 'm ' + sec + 's';
-    return sec + 's';
-  }
 </script>
 </body>
 </html>

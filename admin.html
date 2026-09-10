@@ -24,19 +24,23 @@
     <button class="btn-secondary" id="reveal-dismiss-btn">Got it</button>
   </div>
 
-  <div class="card">
-    <label class="field-label" for="new-student-name">Add a student</label>
-    <input type="text" id="new-student-name" placeholder="Student's name" maxlength="60" />
-    <div class="error" id="create-error"></div>
-    <button class="btn-primary" id="create-btn">Create Account</button>
-  </div>
+  <div id="main-section">
+    <div class="card">
+      <label class="field-label" for="new-student-name">Add a student</label>
+      <input type="text" id="new-student-name" placeholder="Student's name" maxlength="60" />
+      <div class="error" id="create-error"></div>
+      <button class="btn-primary" id="create-btn">Create Account</button>
+    </div>
 
-  <div class="card">
-    <div class="field-label" style="text-align:left;">Students</div>
-    <div id="roster-body">
-      <div class="loading-msg">Loading...</div>
+    <div class="card">
+      <div class="field-label" style="text-align:left;">Students</div>
+      <div id="roster-body">
+        <div class="loading-msg">Loading...</div>
+      </div>
     </div>
   </div>
+
+  <div id="detail-section" hidden></div>
 </div>
 <script src="shared/supabase-client.js"></script>
 <script>
@@ -95,6 +99,7 @@ function renderRoster() {
         <td style="padding:10px 6px;">${s.avgAccuracyPct != null ? s.avgAccuracyPct + '%' : '—'}</td>
         <td style="padding:10px 6px;">${s.avgWpm != null ? s.avgWpm : '—'}</td>
         <td style="padding:10px 6px; white-space:nowrap;">
+          <button class="btn-secondary stats-btn" data-id="${s.id}" data-name="${escapeHtml(s.displayName)}" style="width:auto; margin:0 4px 0 0; padding:6px 10px; font-size:11px;">Stats</button>
           <button class="btn-secondary reset-pin-btn" data-id="${s.id}" data-name="${escapeHtml(s.displayName)}" style="width:auto; margin:0 4px 0 0; padding:6px 10px; font-size:11px;">Reset PIN</button>
           <button class="btn-danger delete-btn" data-id="${s.id}" data-name="${escapeHtml(s.displayName)}" style="width:auto; margin:0; padding:6px 10px; font-size:11px;">Delete</button>
         </td>
@@ -104,12 +109,70 @@ function renderRoster() {
       .join('') +
     '</tbody></table></div>';
 
+  document.querySelectorAll('.stats-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () { viewStudentStats(btn.dataset.id, btn.dataset.name); });
+  });
   document.querySelectorAll('.reset-pin-btn').forEach(function (btn) {
     btn.addEventListener('click', function () { resetPin(btn.dataset.id, btn.dataset.name); });
   });
   document.querySelectorAll('.delete-btn').forEach(function (btn) {
     btn.addEventListener('click', function () { deleteStudent(btn.dataset.id, btn.dataset.name); });
   });
+}
+
+async function viewStudentStats(studentId, displayName) {
+  document.getElementById('main-section').hidden = true;
+  const detailSection = document.getElementById('detail-section');
+  detailSection.hidden = false;
+  detailSection.innerHTML =
+    '<button class="btn-secondary" id="back-to-roster-btn" style="width:auto; margin-bottom:14px;">&larr; Back to roster</button>' +
+    '<div class="loading-msg">Loading...</div>';
+  document.getElementById('back-to-roster-btn').addEventListener('click', hideStudentStats);
+
+  try {
+    const data = await authedFetch('/.netlify/functions/admin-student-stats', {
+      method: 'POST',
+      body: JSON.stringify({ studentId: studentId }),
+    });
+
+    let html = '<button class="btn-secondary" id="back-to-roster-btn" style="width:auto; margin-bottom:14px;">&larr; Back to roster</button>';
+    html += '<div class="brand" style="font-size:22px;">' + escapeHtml(data.displayName) + "'s Stats</div>";
+
+    html += '<div class="card"><h2 style="text-align:center; font-size:16px; color:var(--grey); text-transform:uppercase; letter-spacing:0.05em;">Overall</h2>' +
+      renderStatBoxes(data.overall, 'Texts read') + '</div>';
+
+    if (data.latest) {
+      html += '<div class="card"><h2 style="text-align:center; font-size:16px; color:var(--grey); text-transform:uppercase; letter-spacing:0.05em;">Latest Session</h2>' +
+        '<div class="passage-title" style="font-size:18px;">' + escapeHtml(data.latest.passage_title || data.latest.topic) + '</div>' +
+        '<div class="hint" style="margin-bottom:14px;">Year ' + data.latest.year_level + ' &middot; ' + escapeHtml(data.latest.topic) + '</div>' +
+        '<div class="stat-grid">' +
+        '<div class="stat-box"><div class="stat-num">' + (data.latest.wpm != null ? data.latest.wpm : '—') + '</div><div class="stat-label">Words/min</div></div>' +
+        '<div class="stat-box"><div class="stat-num">' + (data.latest.accuracy_pct != null ? data.latest.accuracy_pct + '%' : '—') + '</div><div class="stat-label">Accuracy</div></div>' +
+        '</div></div>';
+    }
+
+    if (data.byYear && data.byYear.length > 0) {
+      html += '<h2 style="text-align:center; font-size:16px; color:var(--grey); text-transform:uppercase; letter-spacing:0.05em; margin:22px 0 12px;">By Year Level</h2>';
+      html += data.byYear.map(function (row) {
+        return '<div class="card"><h3 style="text-align:center; font-family:var(--display); margin:0 0 4px;">Year ' + row.year_level + '</h3>' +
+          renderStatBoxes(row, 'Texts read') + '</div>';
+      }).join('');
+    }
+
+    detailSection.innerHTML = html;
+    document.getElementById('back-to-roster-btn').addEventListener('click', hideStudentStats);
+  } catch (e) {
+    detailSection.innerHTML =
+      '<button class="btn-secondary" id="back-to-roster-btn" style="width:auto; margin-bottom:14px;">&larr; Back to roster</button>' +
+      '<div class="error">' + escapeHtml(e.message) + '</div>';
+    document.getElementById('back-to-roster-btn').addEventListener('click', hideStudentStats);
+  }
+}
+
+function hideStudentStats() {
+  document.getElementById('detail-section').hidden = true;
+  document.getElementById('detail-section').innerHTML = '';
+  document.getElementById('main-section').hidden = false;
 }
 
 async function createStudent() {
