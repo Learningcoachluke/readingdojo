@@ -115,6 +115,41 @@ function renderStatBoxes(stats, sessionLabel) {
   );
 }
 
+// Renders a row of year-level tab buttons plus a single stats area below
+// them that swaps content when a different year is picked, into
+// containerEl — no scrolling through a stack of separate year cards.
+// Shared by stats.html and admin.html's per-student drill-down.
+function renderYearTabs(containerEl, byYear) {
+  if (!byYear || byYear.length === 0) {
+    containerEl.innerHTML = '';
+    return;
+  }
+  containerEl.innerHTML =
+    '<div class="year-tab-row">' +
+    byYear
+      .map(function (row, i) {
+        return '<button type="button" class="year-tab-btn' + (i === 0 ? ' selected' : '') + '" data-index="' + i + '">Y' + row.year_level + '</button>';
+      })
+      .join('') +
+    '</div>' +
+    '<div class="year-tab-content"></div>';
+
+  var contentEl = containerEl.querySelector('.year-tab-content');
+  function showTab(row) {
+    contentEl.innerHTML =
+      '<h3 style="text-align:center; font-family:var(--display); margin:14px 0 4px;">Year ' + row.year_level + '</h3>' +
+      renderStatBoxes(row, 'Texts read');
+  }
+  containerEl.querySelectorAll('.year-tab-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      containerEl.querySelectorAll('.year-tab-btn').forEach(function (b) { b.classList.remove('selected'); });
+      btn.classList.add('selected');
+      showTab(byYear[Number(btn.dataset.index)]);
+    });
+  });
+  showTab(byYear[0]);
+}
+
 function statBox(value, label) {
   return '<div class="stat-box"><div class="stat-num">' + value + '</div><div class="stat-label">' + escapeHtml(label) + '</div></div>';
 }

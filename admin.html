@@ -153,14 +153,14 @@ async function viewStudentStats(studentId, displayName) {
 
     if (data.byYear && data.byYear.length > 0) {
       html += '<h2 style="text-align:center; font-size:16px; color:var(--grey); text-transform:uppercase; letter-spacing:0.05em; margin:22px 0 12px;">By Year Level</h2>';
-      html += data.byYear.map(function (row) {
-        return '<div class="card"><h3 style="text-align:center; font-family:var(--display); margin:0 0 4px;">Year ' + row.year_level + '</h3>' +
-          renderStatBoxes(row, 'Texts read') + '</div>';
-      }).join('');
+      html += '<div class="card" id="year-tabs"></div>';
     }
 
     detailSection.innerHTML = html;
     document.getElementById('back-to-roster-btn').addEventListener('click', hideStudentStats);
+    if (data.byYear && data.byYear.length > 0) {
+      renderYearTabs(document.getElementById('year-tabs'), data.byYear);
+    }
   } catch (e) {
     detailSection.innerHTML =
       '<button class="btn-secondary" id="back-to-roster-btn" style="width:auto; margin-bottom:14px;">&larr; Back to roster</button>' +

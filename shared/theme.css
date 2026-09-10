@@ -172,6 +172,27 @@ button:disabled{ opacity:0.45; cursor:not-allowed; }
 .genre-btn:hover{ border-color:var(--mint); }
 .genre-btn.selected{ background:var(--mint); color:#0a0a0a; border-color:var(--mint); }
 
+/* ---------- Year tabs (stats page) ---------- */
+.year-tab-row{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  justify-content:center;
+}
+.year-tab-btn{
+  width:auto;
+  margin:0;
+  padding:10px 14px;
+  font-family:var(--display);
+  font-size:14px;
+  background:var(--panel-2);
+  border:1px solid rgba(255,255,255,0.14);
+  border-radius:7px;
+  color:var(--white);
+}
+.year-tab-btn:hover{ border-color:var(--mint); }
+.year-tab-btn.selected{ background:var(--mint); color:#0a0a0a; border-color:var(--mint); }
+
 /* ---------- Stats ---------- */
 .stat-grid{
   display:grid;
@@ -240,24 +261,77 @@ button:disabled{ opacity:0.45; cursor:not-allowed; }
 .stripe-slot.filled{ background:var(--mint); box-shadow:0 0 8px rgba(158,232,168,0.3); }
 
 /* ---------- Recording ---------- */
-.record-wrap{ text-align:center; padding:10px 0 4px; }
-.record-btn{
-  width:96px; height:96px; border-radius:50%;
+.record-inline{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  margin-bottom:18px;
+  padding-bottom:16px;
+  border-bottom:1px solid rgba(255,255,255,0.08);
+}
+.record-btn-sm{
+  flex-shrink:0;
+  width:44px; height:44px; border-radius:50%;
   background:var(--bad);
   border:none;
-  font-family:var(--display);
   color:#fff;
-  font-size:13px;
+  font-size:16px;
   cursor:pointer;
-  margin:8px auto;
+  margin:0;
   display:flex; align-items:center; justify-content:center;
 }
-.record-btn.recording{ animation:pulse 1.4s ease-in-out infinite; }
+.record-btn-sm.recording{ animation:pulse 1.4s ease-in-out infinite; }
 @keyframes pulse{
   0%,100%{ box-shadow:0 0 0 0 rgba(232,115,92,0.5); }
-  50%{ box-shadow:0 0 0 14px rgba(232,115,92,0); }
+  50%{ box-shadow:0 0 0 10px rgba(232,115,92,0); }
 }
-.record-timer{ font-family:var(--display); font-size:28px; color:var(--mint); margin-top:8px; }
+.record-inline-info{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.record-timer-sm{ font-family:var(--display); font-size:18px; color:var(--mint); }
+
+/* ---------- Modal (pre-recording checklist) ---------- */
+.modal-overlay{
+  position:fixed; inset:0;
+  background:rgba(0,0,0,0.65);
+  display:flex; align-items:center; justify-content:center;
+  padding:20px;
+  z-index:100;
+}
+.modal-card{
+  position:relative;
+  width:100%; max-width:400px;
+  background:var(--panel);
+  border:1px solid rgba(255,255,255,0.1);
+  border-radius:12px;
+  padding:26px 22px;
+}
+.modal-close{
+  position:absolute; top:10px; right:10px;
+  width:32px; height:32px; margin:0; padding:0;
+  border-radius:50%;
+  background:transparent;
+  border:1px solid rgba(255,255,255,0.2);
+  color:var(--white);
+  font-size:18px;
+  line-height:1;
+  cursor:pointer;
+}
+.modal-close:hover{ border-color:var(--mint); color:var(--mint); }
+.checklist-item{
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+  margin:16px 0;
+  cursor:pointer;
+  font-weight:700;
+  font-size:15px;
+}
+.checklist-item input[type="checkbox"]{
+  width:20px; height:20px;
+  flex-shrink:0;
+  margin-top:1px;
+  accent-color:var(--mint);
+  cursor:pointer;
+}
 
 /* ---------- Passage ---------- */
 .passage-title{ font-family:var(--display); font-size:24px; margin-bottom:14px; }

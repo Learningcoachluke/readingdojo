@@ -67,17 +67,13 @@
     }
 
     const byYearSection = document.getElementById('by-year-section');
-    if (!byYear || byYear.length === 0) {
-      byYearSection.innerHTML = '';
-    } else {
+    if (byYear && byYear.length > 0) {
       byYearSection.innerHTML =
         '<h2 style="text-align:center; font-size:16px; color:var(--grey); text-transform:uppercase; letter-spacing:0.05em; margin:22px 0 12px;">By Year Level</h2>' +
-        byYear.map((row) => `
-          <div class="card">
-            <h3 style="text-align:center; font-family:var(--display); margin:0 0 4px;">Year ${row.year_level}</h3>
-            ${renderStatBoxes(row, 'Texts read')}
-          </div>
-        `).join('');
+        '<div class="card" id="year-tabs"></div>';
+      renderYearTabs(document.getElementById('year-tabs'), byYear);
+    } else {
+      byYearSection.innerHTML = '';
     }
   })();
 </script>

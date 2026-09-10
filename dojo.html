@@ -55,6 +55,9 @@ const state = {
   answers: [],         // { questionId, answer }
   quizResults: null,   // { results, correctCount, total }
   showPassageRef: false,
+  showPreRecordCheck: false,
+  checklistSkim: false,
+  checklistWords: false,
   errorMsg: '',
 };
 
@@ -179,22 +182,24 @@ function renderPassage() {
   const s = state.session;
   screenEl.innerHTML = `
     <div class="card">
+      <div class="record-inline">
+        ${state.recording ? `
+          <button class="record-btn-sm recording" id="stop-btn" aria-label="Stop recording">&#9632;</button>
+          <div class="record-inline-info">
+            <div class="record-timer-sm" id="record-timer">${formatTime(state.elapsedSeconds)}</div>
+            <button class="btn-secondary" id="stop-btn-2" style="width:auto; margin:0; padding:8px 14px; font-size:12px;">Finished Reading</button>
+          </div>
+        ` : `
+          <button class="record-btn-sm" id="open-record-check-btn" aria-label="Start recording">&#9679;</button>
+          <div class="record-inline-info hint" style="margin:0;">Tap to start reading — no time limit.</div>
+        `}
+      </div>
       <div class="passage-title">${escapeHtml(s.title)}</div>
       <div class="passage-hint">Stuck on a word? Tap it to hear it read aloud — or drag across a few words to hear the whole phrase.</div>
       <div class="passage-text" id="passage-text">${renderClickableWords(s.passage)}</div>
-    </div>
-    <div class="card record-wrap">
-      ${state.recording ? `
-        <div class="hint">Reading out loud — take your time, there's no time limit.</div>
-        <button class="record-btn recording" id="stop-btn">STOP</button>
-        <div class="record-timer" id="record-timer">${formatTime(state.elapsedSeconds)}</div>
-        <button class="btn-secondary" id="stop-btn-2">Finished Reading</button>
-      ` : `
-        <div class="hint">When you're ready, press record and read the passage above out loud.</div>
-        <button class="record-btn" id="start-record-btn">REC</button>
-      `}
       <div class="error">${escapeHtml(state.errorMsg)}</div>
     </div>
+    ${state.showPreRecordCheck ? renderPreRecordModal() : ''}
   `;
 
   initPassageDragSelect(document.getElementById('passage-text'));
@@ -203,8 +208,60 @@ function renderPassage() {
     document.getElementById('stop-btn').addEventListener('click', stopRecording);
     document.getElementById('stop-btn-2').addEventListener('click', stopRecording);
   } else {
-    document.getElementById('start-record-btn').addEventListener('click', startRecording);
+    document.getElementById('open-record-check-btn').addEventListener('click', () => {
+      setState({ showPreRecordCheck: true, checklistSkim: false, checklistWords: false });
+    });
   }
+
+  if (state.showPreRecordCheck) wirePreRecordModal();
+}
+
+// Gate before a boy can start recording: he must tick both checks before
+// the (red) Start Recording button becomes usable. Closing the overlay
+// (the X, or clicking outside the card) cancels without recording.
+function renderPreRecordModal() {
+  const bothChecked = state.checklistSkim && state.checklistWords;
+  return `
+    <div class="modal-overlay" id="pre-record-overlay">
+      <div class="modal-card">
+        <button type="button" class="modal-close" id="modal-close-btn" aria-label="Close">&times;</button>
+        <div class="field-label" style="margin-bottom:6px;">Ready to read?</div>
+        <label class="checklist-item">
+          <input type="checkbox" id="check-skim" ${state.checklistSkim ? 'checked' : ''} />
+          <span>I have skim-read the passage.</span>
+        </label>
+        <label class="checklist-item">
+          <input type="checkbox" id="check-words" ${state.checklistWords ? 'checked' : ''} />
+          <span>I have listened to any words I don't know.</span>
+        </label>
+        <button type="button" class="btn-danger" id="start-recording-btn" ${bothChecked ? '' : 'disabled'}>Start Recording</button>
+      </div>
+    </div>
+  `;
+}
+
+function wirePreRecordModal() {
+  document.getElementById('modal-close-btn').addEventListener('click', closePreRecordModal);
+  document.getElementById('pre-record-overlay').addEventListener('click', (e) => {
+    if (e.target.id === 'pre-record-overlay') closePreRecordModal();
+  });
+  document.getElementById('check-skim').addEventListener('change', (e) => {
+    setState({ checklistSkim: e.target.checked });
+  });
+  document.getElementById('check-words').addEventListener('change', (e) => {
+    setState({ checklistWords: e.target.checked });
+  });
+  const startBtn = document.getElementById('start-recording-btn');
+  if (!startBtn.disabled) {
+    startBtn.addEventListener('click', () => {
+      state.showPreRecordCheck = false; // no re-render here — startRecording() renders once it has mic access
+      startRecording();
+    });
+  }
+}
+
+function closePreRecordModal() {
+  setState({ showPreRecordCheck: false, checklistSkim: false, checklistWords: false });
 }
 
 // Splits the passage into paragraph blocks (blank-line separated). A block
@@ -558,6 +615,7 @@ function renderResults() {
   const s = state.session;
   const results = state.quizResults;
   const byId = Object.fromEntries(results.results.map((r) => [r.questionId, r]));
+  const givenAnswerById = Object.fromEntries(state.answers.map((a) => [a.questionId, a.answer]));
 
   screenEl.innerHTML = `
     <div class="card">
@@ -570,9 +628,20 @@ function renderResults() {
       ${s.questions.map((q) => {
         const r = byId[q.id];
         if (!r) return '';
+        let givenAnswerText = '';
+        if (!r.isCorrect) {
+          const raw = givenAnswerById[q.id];
+          if (q.type === 'multiple_choice') {
+            const idx = parseInt(raw, 10);
+            givenAnswerText = q.options && q.options[idx] != null ? q.options[idx] : '(no answer given)';
+          } else {
+            givenAnswerText = raw ? raw : '(no answer given)';
+          }
+        }
         return `
           <div style="margin-bottom:16px; padding-bottom:16px; border-bottom:1px solid rgba(255,255,255,0.08);">
             <div style="font-weight:800; margin-bottom:6px;">${escapeHtml(q.question)}</div>
+            ${!r.isCorrect ? `<div class="hint" style="margin-bottom:6px;">Your answer: ${escapeHtml(givenAnswerText)}</div>` : ''}
             <div class="feedback ${r.isCorrect ? 'right' : 'wrong'}">${r.isCorrect ? 'Correct — ' : 'Not quite — '}${escapeHtml(r.feedback)}</div>
           </div>
         `;
