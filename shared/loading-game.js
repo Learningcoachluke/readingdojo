@@ -1,9 +1,11 @@
-// loading-game.js — a tiny, dependency-free endless-runner mini-game shown
-// during the app's loading screens (passage generation, reading scoring,
-// comprehension grading) so the wait feels shorter. Pure <canvas> + vanilla
-// JS, no images or libraries — it injects its own <style> tag on first use,
-// so it's a genuine drop-in component: any page can mount it without
-// already having matching CSS loaded.
+// loading-game.js — a tiny, dependency-free drag-to-shoot basketball
+// mini-game shown during the app's loading screens (passage generation,
+// reading scoring, comprehension grading) so the wait feels shorter. Pure
+// <canvas> + vanilla JS, no images/libraries — it injects its own <style>
+// tag on first use, so it's a genuine drop-in component: any page can
+// mount it without already having matching CSS loaded. The score chime is
+// synthesized with the Web Audio API (a couple of oscillator tones) rather
+// than an embedded audio file, keeping this a single, asset-free file.
 //
 // Usage:
 //   const game = LoadingGame.mount(containerEl);
@@ -21,7 +23,7 @@
   var STYLE_ID = "loading-game-styles";
   var CSS =
     ".lg-wrap{position:relative;width:100%;}" +
-    ".lg-canvas{display:block;width:100%;height:150px;background:#000;border-radius:8px;touch-action:manipulation;cursor:pointer;}" +
+    ".lg-canvas{display:block;width:100%;height:150px;background:#000;border-radius:8px;touch-action:none;cursor:pointer;}" +
     ".lg-hint{text-align:center;font-size:12px;color:#9a9a9a;margin-top:8px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;}";
 
   function ensureStyles() {
@@ -32,18 +34,23 @@
     document.head.appendChild(style);
   }
 
-  // ---- Tunable constants (all physics is time-based — px per millisecond
-  // — rather than per-frame, so the game plays at the same speed and
-  // difficulty regardless of the device's actual frame rate) ----
-  var GRAVITY = 0.0014; // px/ms^2, applied to vertical velocity each frame
-  var JUMP_VELOCITY = -0.4; // px/ms, initial upward speed when jumping
-  var BASE_SPEED = 0.28; // px/ms, obstacle scroll speed at the start
-  var MAX_SPEED = 0.75; // px/ms, speed cap — keeps it hard but not impossible
-  var SPEED_RAMP_PER_MS = 0.000006; // how quickly speed climbs toward MAX_SPEED
-  var PLAYER_W = 24;
-  var PLAYER_H = 38;
-  var PLAYER_X = 32; // fixed on-screen X — the world scrolls, not the player
-  var GROUND_MARGIN = 18; // gap between the canvas bottom edge and the ground line
+  // ---- Tunable constants (all physics is time-based — px per
+  // millisecond — rather than per-frame, so the game plays at the same
+  // speed and difficulty regardless of the device's actual frame rate) ----
+  var GRAVITY = 0.0015; // px/ms^2, applied to vertical velocity each frame
+  var POWER_SCALE = 0.01; // px/ms of launch speed per px of drag pull
+  var MIN_DRAG = 10; // px — shorter drags are treated as a cancelled shot
+  var MAX_DRAG = 90; // px — pulling further than this doesn't add more power
+  var BALL_RADIUS = 8;
+  var GROUND_MARGIN = 14; // gap between the canvas bottom edge and the ground line
+  var HOOP_RIGHT_MARGIN = 14; // backboard's distance from the canvas's right edge
+  var BACKBOARD_WIDTH = 4;
+  var BACKBOARD_TOP = 14;
+  var BACKBOARD_HEIGHT = 34;
+  var RIM_WIDTH = 34; // how far the rim sticks out to the left of the backboard
+  var RIM_DROP = 6; // rim's distance below the top of the backboard
+  var POST_RADIUS = 2.5; // collision radius of each rim tip
+  var BOUNCE_RESTITUTION = 0.45; // velocity retained (and reflected) on a rim/backboard hit
 
   function mount(container) {
     ensureStyles();
@@ -55,7 +62,7 @@
     wrap.appendChild(canvas);
     var hint = document.createElement("div");
     hint.className = "lg-hint";
-    hint.textContent = "Tap or press Space to jump";
+    hint.textContent = "Drag the ball to shoot";
     wrap.appendChild(hint);
     container.appendChild(wrap);
 
@@ -73,125 +80,180 @@
       groundY = rect.height - GROUND_MARGIN;
     }
 
+    // Hoop geometry, derived from the canvas's current width so it holds
+    // up across different container sizes. Recomputed on demand (cheap)
+    // rather than cached, so a resize is reflected immediately.
+    function hoopGeometry() {
+      var w = canvas.getBoundingClientRect().width;
+      var backboardX = w - HOOP_RIGHT_MARGIN - BACKBOARD_WIDTH;
+      var rimY = BACKBOARD_TOP + RIM_DROP;
+      return {
+        backboardX: backboardX,
+        backboardTop: BACKBOARD_TOP,
+        backboardBottom: BACKBOARD_TOP + BACKBOARD_HEIGHT,
+        rimY: rimY,
+        rimLeftX: backboardX - RIM_WIDTH,
+        rimRightX: backboardX,
+      };
+    }
+
     // ---- Game state ----
-    var playerY = 0; // vertical offset from standing (negative = airborne, 0 = on ground)
-    var velocityY = 0;
-    var onGround = true;
-    var obstacles = []; // { x, width, height } — x is the obstacle's left edge
-    var spawnTimerMs = 0;
-    var speed = BASE_SPEED;
-    var elapsedMs = 0;
+    var ball = { x: 60, y: 0, vx: 0, vy: 0 };
+    var phase = "idle"; // 'idle' (resting, waiting for a drag) | 'aiming' | 'flying'
+    var dragCurrent = { x: 0, y: 0 }; // live pointer position while aiming
+    var scoredThisFlight = false;
     var score = 0;
-    var runFrame = 0; // drives the simple 2-pose running-leg animation
-    var gameOver = false;
-    var running = true; // flips false once destroy() runs, to stop the rAF loop
+    var hoopShakeMag = 0; // decays each frame after a rim/backboard hit
+    var scorePopup = null; // { ageMs } — a rising "+1" shown briefly after a score
+    var running = true; // false once destroy() runs, to stop the rAF loop
     var rafId = null;
     var lastTs = null;
+    var audioCtx = null;
 
-    function reset() {
-      playerY = 0;
-      velocityY = 0;
-      onGround = true;
-      obstacles = [];
-      spawnTimerMs = randomSpawnDelay();
-      speed = BASE_SPEED;
-      elapsedMs = 0;
-      score = 0;
-      gameOver = false;
+    function respawnBall() {
+      var w = canvas.getBoundingClientRect().width;
+      var spawnRight = Math.max(BALL_RADIUS + 10, w * 0.55);
+      ball.x = BALL_RADIUS + 10 + Math.random() * (spawnRight - BALL_RADIUS - 10);
+      ball.y = groundY - BALL_RADIUS;
+      ball.vx = 0;
+      ball.vy = 0;
+      phase = "idle";
     }
 
-    // Spikes come in faster as speed increases, with randomness so the
-    // spacing never feels mechanical.
-    function randomSpawnDelay() {
-      var base = 900 - (speed - BASE_SPEED) * 600;
-      return Math.max(450, base) + Math.random() * 400;
-    }
-
-    function jump() {
-      if (gameOver) {
-        reset();
-        return;
-      }
-      if (onGround) {
-        velocityY = JUMP_VELOCITY;
-        onGround = false;
-      }
-    }
-
-    function onKeyDown(e) {
-      if (e.code === "Space" || e.key === " ") {
-        e.preventDefault(); // stop the page from scrolling on spacebar
-        jump();
-      }
-    }
-    function onPointerDown(e) {
-      e.preventDefault();
-      jump();
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("resize", resize);
-    canvas.addEventListener("pointerdown", onPointerDown);
-
-    reset();
-    resize();
-
-    function update(dt) {
-      if (gameOver) return;
-
-      elapsedMs += dt;
-      score = Math.floor(elapsedMs / 100);
-      speed = Math.min(MAX_SPEED, BASE_SPEED + elapsedMs * SPEED_RAMP_PER_MS);
-
-      // Gravity integration — simple Euler step, plenty accurate at this scale.
-      velocityY += GRAVITY * dt;
-      playerY += velocityY * dt;
-      if (playerY >= 0) {
-        playerY = 0;
-        velocityY = 0;
-        onGround = true;
-      }
-      if (onGround) runFrame += dt;
-
-      // Spawn and advance obstacles; drop ones that have scrolled off-screen.
-      spawnTimerMs -= dt;
-      if (spawnTimerMs <= 0) {
-        var canvasWidth = canvas.getBoundingClientRect().width;
-        var h = 18 + Math.random() * 22;
-        obstacles.push({ x: canvasWidth, width: 14, height: h });
-        spawnTimerMs = randomSpawnDelay();
-      }
-      for (var i = obstacles.length - 1; i >= 0; i--) {
-        obstacles[i].x -= speed * dt;
-        if (obstacles[i].x + obstacles[i].width < 0) obstacles.splice(i, 1);
-      }
-
-      checkCollisions();
-    }
-
-    // Simple AABB overlap test, with a small inset on the player's hitbox
-    // so close near-misses still feel fair rather than cheap.
-    function checkCollisions() {
-      var feetY = groundY + playerY;
-      var playerBox = {
-        x: PLAYER_X + 4,
-        y: feetY - PLAYER_H + 4,
-        w: PLAYER_W - 8,
-        h: PLAYER_H - 8,
-      };
-      for (var i = 0; i < obstacles.length; i++) {
-        var ob = obstacles[i];
-        var obBox = { x: ob.x, y: groundY - ob.height, w: ob.width, h: ob.height };
-        var overlap =
-          playerBox.x < obBox.x + obBox.w &&
-          playerBox.x + playerBox.w > obBox.x &&
-          playerBox.y < obBox.y + obBox.h &&
-          playerBox.y + playerBox.h > obBox.y;
-        if (overlap) {
-          gameOver = true;
-          return;
+    // A short two-tone chime synthesized with the Web Audio API — no
+    // embedded audio file needed. Wrapped defensively: audio is a nice-to
+    // -have here and must never be able to break the game loop.
+    function ensureAudioContext() {
+      if (!audioCtx) {
+        try {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (e) {
+          audioCtx = null;
         }
       }
+      if (audioCtx && audioCtx.state === "suspended") {
+        audioCtx.resume().catch(function () {});
+      }
+      return audioCtx;
+    }
+
+    function playScoreChime() {
+      var ac = ensureAudioContext();
+      if (!ac) return;
+      try {
+        var now = ac.currentTime;
+        [660, 880].forEach(function (freq, i) {
+          var osc = ac.createOscillator();
+          var gain = ac.createGain();
+          osc.type = "sine";
+          osc.frequency.value = freq;
+          var t0 = now + i * 0.09;
+          gain.gain.setValueAtTime(0.0001, t0);
+          gain.gain.linearRampToValueAtTime(0.15, t0 + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2);
+          osc.connect(gain).connect(ac.destination);
+          osc.start(t0);
+          osc.stop(t0 + 0.22);
+        });
+      } catch (e) {
+        // Ignore — never let a synthesis error interrupt the game.
+      }
+    }
+
+    function distance(x1, y1, x2, y2) {
+      var dx = x2 - x1;
+      var dy = y2 - y1;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    // Reflects the ball's velocity off a point obstacle (a rim tip),
+    // pushing it back outside the collision radius first so it doesn't
+    // stick, then mirroring its velocity across the collision normal with
+    // some energy loss (BOUNCE_RESTITUTION).
+    function bounceOffPoint(px, py) {
+      var dx = ball.x - px;
+      var dy = ball.y - py;
+      var dist = Math.sqrt(dx * dx + dy * dy) || 0.0001;
+      var nx = dx / dist;
+      var ny = dy / dist;
+      var overlap = BALL_RADIUS + POST_RADIUS - dist;
+      if (overlap > 0) {
+        ball.x += nx * overlap;
+        ball.y += ny * overlap;
+      }
+      var dot = ball.vx * nx + ball.vy * ny;
+      ball.vx = (ball.vx - 2 * dot * nx) * BOUNCE_RESTITUTION;
+      ball.vy = (ball.vy - 2 * dot * ny) * BOUNCE_RESTITUTION;
+      hoopShakeMag = 1;
+    }
+
+    function updateFlying(dt, prevY) {
+      var hoop = hoopGeometry();
+
+      // Backboard: a thin vertical wall — bounce the ball back leftward
+      // if it's overlapping it and still travelling toward it.
+      var nearBackboardX =
+        ball.x + BALL_RADIUS > hoop.backboardX &&
+        ball.x - BALL_RADIUS < hoop.backboardX + BACKBOARD_WIDTH &&
+        ball.y > hoop.backboardTop &&
+        ball.y < hoop.backboardBottom;
+      if (nearBackboardX && ball.vx > 0) {
+        ball.x = hoop.backboardX - BALL_RADIUS;
+        ball.vx = -ball.vx * BOUNCE_RESTITUTION;
+        hoopShakeMag = 1;
+      }
+
+      // Rim tips — two small collision posts at each end of the rim opening.
+      if (distance(ball.x, ball.y, hoop.rimLeftX, hoop.rimY) < BALL_RADIUS + POST_RADIUS) {
+        bounceOffPoint(hoop.rimLeftX, hoop.rimY);
+      } else if (distance(ball.x, ball.y, hoop.rimRightX, hoop.rimY) < BALL_RADIUS + POST_RADIUS) {
+        bounceOffPoint(hoop.rimRightX, hoop.rimY);
+      }
+
+      // Scoring: the ball must have been above the rim last frame and at
+      // or below it now, still moving downward, and pass through the
+      // rim's horizontal opening (with a small margin so it has to be a
+      // genuine "through the hoop," not just clipping a rim tip).
+      var margin = BALL_RADIUS * 0.6;
+      if (
+        !scoredThisFlight &&
+        prevY < hoop.rimY &&
+        ball.y >= hoop.rimY &&
+        ball.vy > 0 &&
+        ball.x > hoop.rimLeftX + margin &&
+        ball.x < hoop.rimRightX - margin
+      ) {
+        scoredThisFlight = true;
+        score += 1;
+        scorePopup = { ageMs: 0, x: (hoop.rimLeftX + hoop.rimRightX) / 2, y: hoop.rimY };
+        playScoreChime();
+      }
+
+      // Ground: whatever happened above, once the ball lands the attempt
+      // is over — wait for this, then respawn at a new random spot.
+      if (ball.y + BALL_RADIUS >= groundY) {
+        ball.y = groundY - BALL_RADIUS;
+        respawnBall();
+      }
+    }
+
+    function update(dt) {
+      if (hoopShakeMag > 0) {
+        hoopShakeMag *= 0.85;
+        if (hoopShakeMag < 0.02) hoopShakeMag = 0;
+      }
+      if (scorePopup) {
+        scorePopup.ageMs += dt;
+        if (scorePopup.ageMs > 700) scorePopup = null;
+      }
+
+      if (phase !== "flying") return;
+
+      var prevY = ball.y;
+      ball.vy += GRAVITY * dt;
+      ball.x += ball.vx * dt;
+      ball.y += ball.vy * dt;
+      updateFlying(dt, prevY);
     }
 
     function draw() {
@@ -200,7 +262,7 @@
       var h = rect.height;
       ctx.clearRect(0, 0, w, h);
 
-      // Ground line
+      // Ground
       ctx.strokeStyle = "#3a4050";
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -208,132 +270,169 @@
       ctx.lineTo(w, groundY + 1);
       ctx.stroke();
 
-      // Obstacles — simple triangular spikes
-      ctx.fillStyle = "#ff8a2b";
-      for (var i = 0; i < obstacles.length; i++) {
-        var ob = obstacles[i];
-        ctx.beginPath();
-        ctx.moveTo(ob.x, groundY);
-        ctx.lineTo(ob.x + ob.width / 2, groundY - ob.height);
-        ctx.lineTo(ob.x + ob.width, groundY);
-        ctx.closePath();
-        ctx.fill();
-      }
-
-      drawPlayer();
+      drawHoop();
+      drawAimLine();
+      drawBall();
 
       // Score
       ctx.fillStyle = "#f0f0f0";
       ctx.font = "600 13px -apple-system, BlinkMacSystemFont, sans-serif";
-      ctx.textAlign = "right";
-      ctx.fillText("Score: " + score, w - 10, 18);
+      ctx.textAlign = "left";
+      ctx.fillText("Score: " + score, 10, 18);
 
-      if (gameOver) {
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
-        ctx.fillRect(0, 0, w, h);
-        ctx.fillStyle = "#9ee8a8";
-        ctx.textAlign = "center";
-        ctx.font = "700 16px -apple-system, BlinkMacSystemFont, sans-serif";
-        ctx.fillText("Game Over", w / 2, h / 2 - 6);
-        ctx.fillStyle = "#f0f0f0";
-        ctx.font = "600 12px -apple-system, BlinkMacSystemFont, sans-serif";
-        ctx.fillText("Tap or press Space to try again", w / 2, h / 2 + 14);
-      }
+      drawScorePopup();
     }
 
-    // Manual rounded-rect path (rather than ctx.roundRect, which isn't in
-    // every WebView this might run in) — used for the gi/torso.
-    function roundRectPath(x, y, w, h, r) {
-      ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.arcTo(x + w, y, x + w, y + h, r);
-      ctx.arcTo(x + w, y + h, x, y + h, r);
-      ctx.arcTo(x, y + h, x, y, r);
-      ctx.arcTo(x, y, x + w, y, r);
-      ctx.closePath();
-    }
-
-    // A small running figure — drawn from primitives (no image assets
-    // needed): a filled gi (torso), a black headband, and thick
-    // rounded-cap limb strokes instead of thin wireframe lines so it
-    // reads as a solid character even at this small size. Arms stay
-    // swept back behind him as he sprints; legs alternate between two
-    // run poses and tuck up into a third pose mid-air.
-    function drawPlayer() {
-      var feetY = groundY + playerY;
-      var legPose = onGround ? Math.floor(runFrame / 90) % 2 : 2; // 0/1 = run cycle, 2 = jump tuck
-      var cx = PLAYER_W / 2;
-      var GI = "#f2f2f2";
-      var hipY = -PLAYER_H + 26;
+    function drawHoop() {
+      var hoop = hoopGeometry();
+      var shakeX = hoopShakeMag > 0 ? (Math.random() - 0.5) * 5 * hoopShakeMag : 0;
+      var shakeY = hoopShakeMag > 0 ? (Math.random() - 0.5) * 3 * hoopShakeMag : 0;
 
       ctx.save();
-      ctx.translate(PLAYER_X, feetY);
+      ctx.translate(shakeX, shakeY);
+
+      // Backboard
+      ctx.fillStyle = "#f2f2f2";
+      ctx.fillRect(hoop.backboardX, hoop.backboardTop, BACKBOARD_WIDTH, BACKBOARD_HEIGHT);
+
+      // Rim
+      ctx.strokeStyle = "#ff8a2b";
+      ctx.lineWidth = 3;
       ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-
-      // Legs (drawn first so the gi hem overlaps them slightly)
-      ctx.strokeStyle = GI;
-      ctx.lineWidth = 5;
       ctx.beginPath();
-      if (legPose === 2) {
-        ctx.moveTo(cx, hipY);
-        ctx.lineTo(cx - 6, hipY + 10);
-        ctx.moveTo(cx, hipY);
-        ctx.lineTo(cx + 6, hipY + 10);
-      } else if (legPose === 0) {
-        ctx.moveTo(cx, hipY);
-        ctx.lineTo(cx - 9, 0);
-        ctx.moveTo(cx, hipY);
-        ctx.lineTo(cx + 5, 0);
-      } else {
-        ctx.moveTo(cx, hipY);
-        ctx.lineTo(cx + 9, 0);
-        ctx.moveTo(cx, hipY);
-        ctx.lineTo(cx - 5, 0);
-      }
+      ctx.moveTo(hoop.rimLeftX, hoop.rimY);
+      ctx.lineTo(hoop.rimRightX, hoop.rimY);
       ctx.stroke();
 
-      // Torso — the gi, a filled rounded rectangle
-      ctx.fillStyle = GI;
-      roundRectPath(cx - 7, -PLAYER_H + 11, 14, 17, 4);
-      ctx.fill();
-
-      // Arms — both swept back behind him as he sprints (he's facing
-      // right, into the oncoming obstacles, so "behind" is toward -x).
-      ctx.strokeStyle = GI;
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(cx, -PLAYER_H + 16);
-      ctx.lineTo(cx - 10, -PLAYER_H + 11);
-      ctx.moveTo(cx, -PLAYER_H + 16);
-      ctx.lineTo(cx - 9, -PLAYER_H + 23);
-      ctx.stroke();
-
-      // Head
-      ctx.fillStyle = GI;
-      ctx.beginPath();
-      ctx.arc(cx, -PLAYER_H + 5, 7, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Headband — black, with a thin light outline so it stays visible
-      // against the black canvas — tied off with a short trailing tail.
-      ctx.fillStyle = "#1a1a1a";
-      ctx.strokeStyle = GI;
+      // Net — a few simple lines hanging from the rim, tapering inward
+      ctx.strokeStyle = "rgba(242,242,242,0.55)";
       ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.rect(cx - 7, -PLAYER_H + 3, 14, 3);
-      ctx.fill();
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(cx + 7, -PLAYER_H + 4);
-      ctx.lineTo(cx + 13, -PLAYER_H + 2);
-      ctx.lineTo(cx + 13, -PLAYER_H + 6);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
+      var netSpan = hoop.rimRightX - hoop.rimLeftX;
+      var strands = 4;
+      for (var i = 0; i <= strands; i++) {
+        var topX = hoop.rimLeftX + (netSpan * i) / strands;
+        var bottomX = hoop.rimLeftX + netSpan * 0.5 + (topX - (hoop.rimLeftX + netSpan * 0.5)) * 0.4;
+        ctx.beginPath();
+        ctx.moveTo(topX, hoop.rimY);
+        ctx.lineTo(bottomX, hoop.rimY + 12);
+        ctx.stroke();
+      }
 
       ctx.restore();
     }
+
+    function drawAimLine() {
+      if (phase !== "aiming") return;
+      var dx = dragCurrent.x - ball.x;
+      var dy = dragCurrent.y - ball.y;
+      var pull = Math.min(MAX_DRAG, Math.sqrt(dx * dx + dy * dy));
+      if (pull < MIN_DRAG) return;
+      var angle = Math.atan2(dy, dx);
+      // The shot fires opposite the drag (pull back, like a slingshot).
+      var tipX = ball.x - Math.cos(angle) * pull;
+      var tipY = ball.y - Math.sin(angle) * pull;
+
+      ctx.strokeStyle = "rgba(158,232,168,0.8)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(ball.x, ball.y);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Small arrowhead at the tip so the shot direction is unambiguous.
+      var headAngle = Math.atan2(ball.y - tipY, ball.x - tipX);
+      ctx.fillStyle = "rgba(158,232,168,0.9)";
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX - Math.cos(headAngle - 0.4) * 7, tipY - Math.sin(headAngle - 0.4) * 7);
+      ctx.lineTo(tipX - Math.cos(headAngle + 0.4) * 7, tipY - Math.sin(headAngle + 0.4) * 7);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function drawBall() {
+      ctx.fillStyle = "#ff8a2b";
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      // A couple of seam lines so it reads as a basketball, not a dot.
+      ctx.strokeStyle = "rgba(26,26,26,0.6)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(ball.x - BALL_RADIUS, ball.y);
+      ctx.lineTo(ball.x + BALL_RADIUS, ball.y);
+      ctx.moveTo(ball.x, ball.y - BALL_RADIUS);
+      ctx.lineTo(ball.x, ball.y + BALL_RADIUS);
+      ctx.stroke();
+    }
+
+    function drawScorePopup() {
+      if (!scorePopup) return;
+      var t = scorePopup.ageMs / 700;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - t);
+      ctx.fillStyle = "#9ee8a8";
+      ctx.font = "700 14px -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("+1", scorePopup.x, scorePopup.y - 10 - t * 18);
+      ctx.restore();
+    }
+
+    // ---- Input: drag-to-shoot via Pointer Events (mouse, touch, and pen
+    // all behave the same way). Pointer capture on the canvas means a drag
+    // that leaves its bounds still resolves correctly on release. ----
+    function localPos(e) {
+      var rect = canvas.getBoundingClientRect();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+
+    function onPointerDown(e) {
+      ensureAudioContext(); // unlock audio now, inside a real user gesture
+      if (phase !== "idle") return;
+      var p = localPos(e);
+      if (distance(p.x, p.y, ball.x, ball.y) > BALL_RADIUS + 8) return; // must grab the ball itself
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      phase = "aiming";
+      dragCurrent = p;
+    }
+
+    function onPointerMove(e) {
+      if (phase !== "aiming") return;
+      dragCurrent = localPos(e);
+    }
+
+    function onPointerUp(e) {
+      if (phase !== "aiming") return;
+      var p = localPos(e);
+      var dx = p.x - ball.x;
+      var dy = p.y - ball.y;
+      var pull = Math.sqrt(dx * dx + dy * dy);
+      if (pull < MIN_DRAG) {
+        phase = "idle"; // treat a too-short drag as a cancelled shot
+        return;
+      }
+      var clamped = Math.min(MAX_DRAG, pull);
+      var angle = Math.atan2(dy, dx);
+      // Launch opposite the drag direction — pull back, release forward.
+      ball.vx = -Math.cos(angle) * clamped * POWER_SCALE;
+      ball.vy = -Math.sin(angle) * clamped * POWER_SCALE;
+      scoredThisFlight = false;
+      phase = "flying";
+    }
+
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onPointerMove);
+    canvas.addEventListener("pointerup", onPointerUp);
+    canvas.addEventListener("pointercancel", function () {
+      phase = "idle";
+    });
+    window.addEventListener("resize", resize);
+
+    resize();
+    respawnBall();
 
     function loop(ts) {
       if (!running) return;
@@ -350,9 +449,14 @@
       destroy: function () {
         running = false;
         if (rafId != null) cancelAnimationFrame(rafId);
-        window.removeEventListener("keydown", onKeyDown);
         window.removeEventListener("resize", resize);
         canvas.removeEventListener("pointerdown", onPointerDown);
+        canvas.removeEventListener("pointermove", onPointerMove);
+        canvas.removeEventListener("pointerup", onPointerUp);
+        if (audioCtx) {
+          audioCtx.close().catch(function () {});
+          audioCtx = null;
+        }
         if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
       },
     };
