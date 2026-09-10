@@ -40,9 +40,9 @@
   var BASE_SPEED = 0.28; // px/ms, obstacle scroll speed at the start
   var MAX_SPEED = 0.75; // px/ms, speed cap — keeps it hard but not impossible
   var SPEED_RAMP_PER_MS = 0.000006; // how quickly speed climbs toward MAX_SPEED
-  var PLAYER_W = 22;
-  var PLAYER_H = 34;
-  var PLAYER_X = 30; // fixed on-screen X — the world scrolls, not the player
+  var PLAYER_W = 24;
+  var PLAYER_H = 38;
+  var PLAYER_X = 32; // fixed on-screen X — the world scrolls, not the player
   var GROUND_MARGIN = 18; // gap between the canvas bottom edge and the ground line
 
   function mount(container) {
@@ -241,57 +241,105 @@
       }
     }
 
+    // Manual rounded-rect path (rather than ctx.roundRect, which isn't in
+    // every WebView this might run in) — used for the gi/torso.
+    function roundRectPath(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
     // A small martial-arts figure in a fighting stance — drawn from
-    // primitives (no image assets needed). Legs alternate between two
-    // poses while running, and tuck up into a third pose mid-air.
+    // primitives (no image assets needed): a filled gi (torso) with a
+    // black belt, a headband, and thick rounded-cap limb strokes instead
+    // of thin wireframe lines so it reads as a solid character even at
+    // this small size. Legs alternate between two run poses and tuck up
+    // into a third pose mid-air.
     function drawPlayer() {
       var feetY = groundY + playerY;
       var legPose = onGround ? Math.floor(runFrame / 90) % 2 : 2; // 0/1 = run cycle, 2 = jump tuck
       var cx = PLAYER_W / 2;
+      var GI = "#f2f2f2";
+      var hipY = -PLAYER_H + 26;
 
       ctx.save();
       ctx.translate(PLAYER_X, feetY);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
 
-      // Head
-      ctx.fillStyle = "#e8e8e8";
+      // Legs (drawn first so the gi hem overlaps them slightly)
+      ctx.strokeStyle = GI;
+      ctx.lineWidth = 5;
       ctx.beginPath();
-      ctx.arc(cx, -PLAYER_H + 6, 6, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Torso
-      ctx.fillRect(cx - 4, -PLAYER_H + 12, 8, 14);
-
-      // Belt — a little Dojo touch
-      ctx.fillStyle = "#9ee8a8";
-      ctx.fillRect(cx - 4, -PLAYER_H + 22, 8, 3);
-
-      // Arms, in a guard stance
-      ctx.strokeStyle = "#e8e8e8";
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(cx, -PLAYER_H + 16);
-      ctx.lineTo(cx + 9, -PLAYER_H + 20);
-      ctx.moveTo(cx, -PLAYER_H + 16);
-      ctx.lineTo(cx - 6, -PLAYER_H + 24);
-      ctx.stroke();
-
-      // Legs
-      ctx.beginPath();
-      ctx.moveTo(cx, -PLAYER_H + 26);
       if (legPose === 2) {
-        ctx.lineTo(cx - 5, -PLAYER_H + 32);
-        ctx.moveTo(cx, -PLAYER_H + 26);
-        ctx.lineTo(cx + 5, -PLAYER_H + 32);
+        ctx.moveTo(cx, hipY);
+        ctx.lineTo(cx - 6, hipY + 10);
+        ctx.moveTo(cx, hipY);
+        ctx.lineTo(cx + 6, hipY + 10);
       } else if (legPose === 0) {
-        ctx.lineTo(cx - 8, 0);
-        ctx.moveTo(cx, -PLAYER_H + 26);
-        ctx.lineTo(cx + 4, 0);
+        ctx.moveTo(cx, hipY);
+        ctx.lineTo(cx - 9, 0);
+        ctx.moveTo(cx, hipY);
+        ctx.lineTo(cx + 5, 0);
       } else {
-        ctx.lineTo(cx + 8, 0);
-        ctx.moveTo(cx, -PLAYER_H + 26);
-        ctx.lineTo(cx - 4, 0);
+        ctx.moveTo(cx, hipY);
+        ctx.lineTo(cx + 9, 0);
+        ctx.moveTo(cx, hipY);
+        ctx.lineTo(cx - 5, 0);
       }
       ctx.stroke();
+
+      // Torso — the gi, a filled rounded rectangle
+      ctx.fillStyle = GI;
+      roundRectPath(cx - 7, -PLAYER_H + 11, 14, 17, 4);
+      ctx.fill();
+
+      // Belt — black with a thin mint trim so it stays visible against
+      // the black canvas background, plus two hanging ends. A small nod
+      // to "Black Belt" itself.
+      ctx.fillStyle = "#1a1a1a";
+      ctx.strokeStyle = "#9ee8a8";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.rect(cx - 7, hipY - 5, 14, 5);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillRect(cx - 3, hipY, 3, 8);
+      ctx.fillRect(cx + 1, hipY, 3, 9);
+
+      // Arms — front arm punched forward with a small fist, rear arm back
+      ctx.strokeStyle = GI;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(cx, -PLAYER_H + 16);
+      ctx.lineTo(cx + 10, -PLAYER_H + 19);
+      ctx.moveTo(cx, -PLAYER_H + 16);
+      ctx.lineTo(cx - 7, -PLAYER_H + 23);
+      ctx.stroke();
+      ctx.fillStyle = GI;
+      ctx.beginPath();
+      ctx.arc(cx + 11, -PLAYER_H + 19, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Head
+      ctx.fillStyle = GI;
+      ctx.beginPath();
+      ctx.arc(cx, -PLAYER_H + 5, 7, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Headband, tied off with a short trailing tail
+      ctx.fillStyle = "#9ee8a8";
+      ctx.fillRect(cx - 7, -PLAYER_H + 3, 14, 3);
+      ctx.beginPath();
+      ctx.moveTo(cx + 7, -PLAYER_H + 4);
+      ctx.lineTo(cx + 13, -PLAYER_H + 2);
+      ctx.lineTo(cx + 13, -PLAYER_H + 6);
+      ctx.closePath();
+      ctx.fill();
 
       ctx.restore();
     }
