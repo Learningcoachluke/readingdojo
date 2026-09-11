@@ -446,6 +446,9 @@ async function playWord(text, els) {
   try {
     let url = cacheable ? wordAudioCache.get(text) : null;
     if (!url) {
+      // Only the network round-trip needs a busy cursor — a cache hit
+      // plays back instantly, so there's nothing to show a wait state for.
+      document.body.style.cursor = 'wait';
       const blob = await authedFetchBlob('/.netlify/functions/speak-word', {
         method: 'POST',
         body: JSON.stringify({ text }),
@@ -458,6 +461,8 @@ async function playWord(text, els) {
     await currentWordAudio.play();
   } catch (e) {
     els.forEach((el) => el.classList.remove('playing'));
+  } finally {
+    document.body.style.cursor = '';
   }
 }
 
