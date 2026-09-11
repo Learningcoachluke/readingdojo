@@ -357,6 +357,10 @@ button:disabled{ opacity:0.45; cursor:not-allowed; }
 .word:hover{ background:rgba(158,232,168,0.18); }
 .word.selecting{ background:rgba(158,232,168,0.30); }
 .word.playing{ background:var(--mint); color:#0a0a0a; }
+/* While tap-to-hear audio is loading, this needs to beat .word's own
+   cursor:pointer — otherwise the boy's mouse just sat down on the word he
+   tapped, so a body-level cursor change alone is never actually visible. */
+.passage-text.audio-loading, .passage-text.audio-loading .word{ cursor:wait; }
 .passage-hint{ font-size:13px; color:var(--grey); margin-bottom:14px; }
 
 /* ---------- Nav / header ---------- */

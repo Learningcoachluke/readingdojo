@@ -443,12 +443,18 @@ async function playWord(text, els) {
   els.forEach((el) => el.classList.add('playing'));
 
   const cacheable = els.length === 1;
+  const passageEl = document.getElementById('passage-text');
   try {
     let url = cacheable ? wordAudioCache.get(text) : null;
     if (!url) {
       // Only the network round-trip needs a busy cursor — a cache hit
       // plays back instantly, so there's nothing to show a wait state for.
+      // The class on passageEl is what actually matters: the boy's mouse
+      // is sitting right on the word he just tapped, and .word's own
+      // cursor:pointer would otherwise hide a body-level cursor change —
+      // see the .audio-loading rule in theme.css, which beats it.
       document.body.style.cursor = 'wait';
+      if (passageEl) passageEl.classList.add('audio-loading');
       const blob = await authedFetchBlob('/.netlify/functions/speak-word', {
         method: 'POST',
         body: JSON.stringify({ text }),
@@ -463,6 +469,7 @@ async function playWord(text, els) {
     els.forEach((el) => el.classList.remove('playing'));
   } finally {
     document.body.style.cursor = '';
+    if (passageEl) passageEl.classList.remove('audio-loading');
   }
 }
 
