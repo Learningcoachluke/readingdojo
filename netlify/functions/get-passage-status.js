@@ -65,6 +65,19 @@ exports.handler = async function (event) {
       `session_id=eq.${sessionId}&select=id,question_index,question_type,question_text,options&order=question_index.asc`
     );
 
+    // Belt-and-suspenders: the background function now inserts questions
+    // before flipping status to 'generated', so this shouldn't be possible
+    // — but if it ever is, tell the client to keep polling rather than
+    // handing it a passage with no quiz, which silently breaks later at
+    // "Save Score & Continue".
+    if (questions.length === 0) {
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "generating" }),
+      };
+    }
+
     return {
       statusCode: 200,
       headers: { "Content-Type": "application/json" },

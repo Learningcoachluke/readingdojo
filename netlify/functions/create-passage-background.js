@@ -67,13 +67,6 @@ exports.handler = async function (event) {
 
     const wordCount = generated.passage.trim().split(/\s+/).filter(Boolean).length;
 
-    await updateOne("reading_sessions", `id=eq.${sessionId}`, {
-      passage_title: generated.title,
-      passage_text: generated.passage,
-      word_count: wordCount,
-      status: "generated",
-    });
-
     const questionRows = generated.questions.map((q, i) => ({
       session_id: sessionId,
       question_index: i,
@@ -84,7 +77,18 @@ exports.handler = async function (event) {
       model_answer: q.type === "short_answer" ? q.modelAnswer : null,
       explanation: q.explanation || null,
     }));
+    // Insert the questions BEFORE flipping status to 'generated' — the
+    // client stops polling the instant it sees that status, so if the rows
+    // went in afterward there'd be a real window where it could grab zero
+    // questions and then silently break when the boy reaches the quiz.
     await insertMany("comprehension_questions", questionRows);
+
+    await updateOne("reading_sessions", `id=eq.${sessionId}`, {
+      passage_title: generated.title,
+      passage_text: generated.passage,
+      word_count: wordCount,
+      status: "generated",
+    });
 
     // Only logged now that generation has genuinely succeeded — a blocked
     // or failed attempt doesn't count against the boy's daily quota.
