@@ -150,13 +150,14 @@ ${strict ? "- The previous attempt was flagged as inappropriate. Be noticeably m
 ${genreInstructions}
 - Match reading difficulty (vocabulary, sentence length, sentence complexity, idea density) to the given year level. Year 9-10 passages can use longer sentences and more sophisticated vocabulary and ideas than Year 2-4.
 - Output ONLY valid JSON as a single line, no markdown fences, no commentary, matching exactly this shape:
-{"title":"string","passage":"string; use the two-character escape sequence \\n\\n between paragraphs — do NOT put a literal line break inside the JSON string, it must stay valid single-line JSON","questions":[{"type":"multiple_choice","question":"string","options":["string","string","string","string"],"correctIndex":0,"explanation":"one short sentence, under 15 words"}]}
-  (short-answer questions instead use: {"type":"short_answer","question":"string","modelAnswer":"string — a full reference answer for grading","explanation":"one short sentence, under 15 words"})
+{"title":"string","passage":"string; use the two-character escape sequence \\n\\n between paragraphs — do NOT put a literal line break inside the JSON string, it must stay valid single-line JSON","questions":[{"type":"multiple_choice","question":"string","options":["string","string","string","string"],"correctIndex":0,"explanation":"under 10 words"}]}
+  (short-answer questions instead use: {"type":"short_answer","question":"string","modelAnswer":"one concise sentence covering what a correct answer needs to include","explanation":"under 10 words"})
 - Write exactly ${multipleChoiceCount} questions with "type":"multiple_choice" and exactly ${shortAnswerCount} questions with "type":"short_answer", in any order.
 - ${questionStyle} Keep wording age-appropriate.
 - Multiple-choice: exactly one correct option, options short and plausible (no joke/throwaway options).
-- Short-answer: the modelAnswer should be a full sentence or two capturing what a correct answer needs to include, since it'll be used to grade the boy's own written answer.
-- Keep each question, option, and explanation concise so the full response stays compact.
+- Short-answer: the modelAnswer is one concise sentence (not a paragraph) capturing what a correct answer needs to include, since it'll be used to grade the boy's own written answer.
+- Be direct and efficient throughout — no padding, no restating the question, no throat-clearing before getting to the point. This matters most for higher year levels, which have the most questions to get through.
+- Keep each question, option, explanation, and model answer concise so the full response stays compact.
 - Do not include any text outside the JSON object.`;
 
   const userPrompt = `Topic: ${topic}\nGenre: ${genre === "fiction" ? "Fiction (story)" : "Non-fiction (factual, with subheadings)"}\nYear level: Year ${yearLevel}\nTarget passage length: ${wordTarget} words.\nGenerate the passage and questions now as JSON only.`;
