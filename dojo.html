@@ -25,6 +25,8 @@
 
 <script src="shared/supabase-client.js"></script>
 <script src="shared/loading-game.js"></script>
+<script src="shared/soccer-game.js"></script>
+<script src="shared/runner-game.js"></script>
 <script>
 const YEAR_LEVELS = [
   { year: 2, age: 'Ages 6-7' }, { year: 3, age: 'Ages 7-8' }, { year: 4, age: 'Ages 8-9' },
@@ -63,12 +65,22 @@ const state = {
 
 const screenEl = document.getElementById('screen');
 
-// The loading mini-game (see shared/loading-game.js) mounts fresh on every
-// loading screen and must be torn down the instant we leave it — this
-// single teardown point at the top of render() guarantees that regardless
-// of which screen comes next, so the game stops immediately once the real
-// content (passage/score/grade) is ready.
+// The loading mini-games (shared/loading-game.js, soccer-game.js,
+// runner-game.js) mount fresh on every loading screen and must be torn
+// down the instant we leave it — this single teardown point at the top
+// of render() guarantees that regardless of which screen comes next, so
+// the game stops immediately once the real content (passage/score/grade)
+// is ready. Which one shows is picked at random each time: basketball is
+// the default (60%), with the soccer and runner games each showing 20%
+// of the time for variety.
 let activeLoadingGame = null;
+
+function pickLoadingGame() {
+  const r = Math.random();
+  if (r < 0.6) return window.LoadingGame;
+  if (r < 0.8) return window.SoccerGame;
+  return window.RunnerGame;
+}
 
 function setState(patch) {
   Object.assign(state, patch);
@@ -170,10 +182,11 @@ function renderLoading(kind) {
       <div id="loading-game-slot"></div>
     </div>
   `;
-  // Guard in case the LoadingGame script failed to load for some reason —
-  // the loading message above still works fine on its own.
-  if (window.LoadingGame) {
-    activeLoadingGame = window.LoadingGame.mount(document.getElementById('loading-game-slot'));
+  // Guard in case a game script failed to load for some reason — the
+  // loading message above still works fine on its own.
+  const game = pickLoadingGame();
+  if (game) {
+    activeLoadingGame = game.mount(document.getElementById('loading-game-slot'));
   }
 }
 

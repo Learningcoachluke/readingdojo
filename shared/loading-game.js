@@ -57,7 +57,9 @@
   var GRAVITY = 0.0015; // px/ms^2, applied to vertical velocity each frame
   var POWER_SCALE = 0.01; // px/ms of launch speed per px of drag pull
   var MIN_DRAG = 10; // px — shorter drags are treated as a cancelled shot
+  var MIN_SHOT_PULL = 38; // px — any valid drag is treated as pulling at least this far, so short-but-real drags still fire a visible shot instead of a barely-there flick
   var MAX_DRAG = 90; // px — pulling further than this doesn't add more power
+  var MIN_LAUNCH_VY = -0.22; // px/ms — every shot launches at least this far upward (negative = up), so a mostly-sideways drag still produces a real, visible arc instead of an instant "landing"
   var BALL_RADIUS = 8;
   var BOUNCE_RESTITUTION = 0.45; // velocity retained (and reflected) on a rim/backboard hit
   var POST_RADIUS = 2.5; // collision radius of each rim tip
@@ -68,8 +70,7 @@
   // and rim actually sit within the transparent canvas) so the physics
   // lines up with what's drawn regardless of what size we render it at. ----
   var HOOP_ASPECT = 350 / 537;
-  var HOOP_TOP_MARGIN = 4;
-  var HOOP_BOTTOM_MARGIN = 4;
+  var HOOP_HEIGHT_FRAC = 0.85; // hoop sprite height as a fraction of the canvas height — sized close to its regular size, but vertically centered instead of pinned to the top
   var HOOP_RIGHT_MARGIN = 10;
   var BACKBOARD_LEFT_FRAC = 0.371;
   var BACKBOARD_RIGHT_FRAC = 0.653;
@@ -114,6 +115,17 @@
     // pixel ratio) so drawing stays crisp without manually scaling shapes.
     function resize() {
       var rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        // Layout isn't ready yet (can happen the instant a container is
+        // inserted into the DOM) — retry next frame instead of sizing
+        // everything to 0 and stranding the ball/hoop off-screen.
+        requestAnimationFrame(function () {
+          if (!running) return;
+          resize();
+          respawnBall();
+        });
+        return;
+      }
       var dpr = window.devicePixelRatio || 1;
       canvas.width = Math.round(rect.width * dpr);
       canvas.height = Math.round(rect.height * dpr);
@@ -160,10 +172,10 @@
     // reflected immediately.
     function hoopGeometry() {
       var rect = canvas.getBoundingClientRect();
-      var spriteH = rect.height - HOOP_TOP_MARGIN - HOOP_BOTTOM_MARGIN;
+      var spriteH = rect.height * HOOP_HEIGHT_FRAC;
       var spriteW = spriteH * HOOP_ASPECT;
       var spriteX = rect.width - HOOP_RIGHT_MARGIN - spriteW;
-      var spriteY = HOOP_TOP_MARGIN;
+      var spriteY = (rect.height - spriteH) / 2;
       return {
         spriteX: spriteX,
         spriteY: spriteY,
@@ -199,17 +211,27 @@
     // Picks a random resting spot anywhere on the court floor (avoiding
     // the hoop itself so the ball never respawns stuck under the rim).
     function respawnBall() {
+      var rect = canvas.getBoundingClientRect();
       var court = courtGeometry();
       var hoop = hoopGeometry();
+      // Keep the whole ball on-screen — sample y only within the range
+      // where a full BALL_RADIUS circle centered there still fits inside
+      // both the court floor and the actual canvas.
+      var minY = court.topY + BALL_RADIUS;
+      var maxY = Math.min(court.bottomY, rect.height) - BALL_RADIUS;
       var x = 0;
       var y = 0;
       var tries;
       for (tries = 0; tries < 12; tries++) {
-        y = court.topY + Math.random() * (court.bottomY - court.topY);
+        y = minY + Math.random() * Math.max(1, maxY - minY);
         var bounds = courtXBoundsAtY(court, y);
         var usable = Math.max(1, bounds.right - bounds.left - BALL_RADIUS * 2);
         x = bounds.left + BALL_RADIUS + Math.random() * usable;
-        var nearHoop = x > hoop.rimLeftX - 24 && y < hoop.backboardBottom + 20;
+        var nearHoop =
+          x > hoop.spriteX - 26 &&
+          x < hoop.spriteX + hoop.spriteW + 10 &&
+          y > hoop.spriteY - 15 &&
+          y < hoop.spriteY + hoop.spriteH + 15;
         if (!nearHoop) break;
       }
       ball.x = x;
@@ -329,10 +351,15 @@
         playScoreChime();
       }
 
-      // Floor: whatever happened above, once the ball falls back to the
-      // height it launched from, the attempt is over — respawn it
-      // somewhere fresh on the court.
-      if (ball.y + BALL_RADIUS >= flightFloorY) {
+      // Floor: whatever happened above, once the ball rises off its launch
+      // height and then falls back down through it, the attempt is over —
+      // respawn it somewhere fresh on the court. The prevY/vy guards (same
+      // pattern as the scoring check above) matter a lot here: without
+      // them, "ball.y + BALL_RADIUS >= flightFloorY" is already true at
+      // the moment of launch (the ball's own radius alone satisfies it),
+      // so almost every shot would "land" on its very first frame — which
+      // looked exactly like the ball never left and just teleported.
+      if (prevY < flightFloorY && ball.y + BALL_RADIUS >= flightFloorY && ball.vy > 0) {
         ball.y = flightFloorY - BALL_RADIUS;
         respawnBall();
       }
@@ -405,8 +432,11 @@
       if (phase !== "aiming") return;
       var dx = dragCurrent.x - ball.x;
       var dy = dragCurrent.y - ball.y;
-      var pull = Math.min(MAX_DRAG, Math.sqrt(dx * dx + dy * dy));
-      if (pull < MIN_DRAG) return;
+      var rawPull = Math.sqrt(dx * dx + dy * dy);
+      if (rawPull < MIN_DRAG) return;
+      // Match the line length to the actual shot power (see onPointerUp),
+      // so a short-but-valid drag still shows a real, visible pull.
+      var pull = Math.min(MAX_DRAG, Math.max(MIN_SHOT_PULL, rawPull));
       var angle = Math.atan2(dy, dx);
       // The shot fires opposite the drag (pull back, like a slingshot).
       var tipX = ball.x - Math.cos(angle) * pull;
@@ -490,11 +520,19 @@
         phase = "idle"; // treat a too-short drag as a cancelled shot
         return;
       }
-      var clamped = Math.min(MAX_DRAG, pull);
+      // Any valid drag is treated as pulling at least MIN_SHOT_PULL, so a
+      // short-but-real drag still fires a visible shot instead of a
+      // barely-there flick that looks like the ball just teleported.
+      var clamped = Math.min(MAX_DRAG, Math.max(MIN_SHOT_PULL, pull));
       var angle = Math.atan2(dy, dx);
       // Launch opposite the drag direction — pull back, release forward.
       ball.vx = -Math.cos(angle) * clamped * POWER_SCALE;
       ball.vy = -Math.sin(angle) * clamped * POWER_SCALE;
+      // A mostly-sideways drag can produce almost no vertical speed, so
+      // the "flight" ends (falls back to launch height) within a frame or
+      // two — looking exactly like the ball did nothing and teleported.
+      // Guarantee every shot a real, visible arc regardless of drag angle.
+      if (ball.vy > MIN_LAUNCH_VY) ball.vy = MIN_LAUNCH_VY;
       scoredThisFlight = false;
       flightFloorY = ball.y; // this shot "lands" once it falls back to its own launch height
       phase = "flying";
