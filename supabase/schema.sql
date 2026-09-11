@@ -26,8 +26,9 @@ create table public.reading_sessions (
   passage_title             text,
   passage_text              text,
   word_count                int,
-  status                    text not null default 'generated'
-                              check (status in ('generated','reading_submitted','completed','failed')),
+  status                    text not null default 'generating'
+                              check (status in ('generating','generated','blocked','reading_submitted','completed','failed')),
+  error_message             text,  -- user-facing reason when status is 'blocked'/'failed', set by create-passage-background.js
   transcript                text,
   accuracy_pct              numeric(5,2),
   wpm                       numeric(6,2),

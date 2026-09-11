@@ -147,6 +147,33 @@ function renderSetup() {
   document.getElementById('start-btn').addEventListener('click', generatePassage);
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Generation happens in a Netlify Background Function (see
+// create-passage-background.js) rather than inline in the request, since
+// Year 9-10's much bigger completion routinely blew past the ~10s limit a
+// normal synchronous function gets. create-passage.js now just creates the
+// session and kicks that off, returning a sessionId immediately — this
+// polls get-passage-status.js until it's ready, while the existing loading
+// screen (with its mini-games) keeps the boy occupied in the meantime.
+async function pollForPassage(sessionId) {
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    const data = await authedFetch('/.netlify/functions/get-passage-status', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: sessionId }),
+    });
+    if (data.status === 'generated') return data;
+    if (data.status === 'blocked' || data.status === 'failed') {
+      const err = new Error(data.message || "Couldn't build that passage — try again.");
+      err.blocked = data.blocked;
+      throw err;
+    }
+    await sleep(1500);
+  }
+  throw new Error("That's taking longer than expected — try again.");
+}
+
 async function generatePassage() {
   const topic = state.topic.trim();
   if (!topic) { setState({ errorMsg: 'Type a topic first.' }); return; }
@@ -156,10 +183,11 @@ async function generatePassage() {
   setState({ screen: 'loading-passage', errorMsg: '' });
 
   try {
-    const data = await authedFetch('/.netlify/functions/create-passage', {
+    const { sessionId } = await authedFetch('/.netlify/functions/create-passage', {
       method: 'POST',
       body: JSON.stringify({ topic: topic, yearLevel: state.year, genre: state.genre }),
     });
+    const data = await pollForPassage(sessionId);
     setState({
       screen: 'passage',
       session: data,
@@ -170,7 +198,7 @@ async function generatePassage() {
       quizResults: null,
     });
   } catch (e) {
-    setState({ screen: 'setup', errorMsg: e.blocked ? e.message : "Couldn't build that passage — try again." });
+    setState({ screen: 'setup', errorMsg: e.message || "Couldn't build that passage — try again." });
   }
 }
 
